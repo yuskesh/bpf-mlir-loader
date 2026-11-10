@@ -1,0 +1,6 @@
+# libbpf-pin.tsv — written by scripts/libbpf-pin.sh (libbpf v1.7.0 f5dcbae7). file and sha256. Guard preconditions: libbpf.c (btf_needs_sanitization, sanitize_btf, BTF is optional, dropping map BTF, helper substitution, kernel_supports), features.c (feat_supported and the probes), libbpf_internal.h (enum kern_feature_id values, LBF_* in src/load/internal.h), bpf.c (libbpf_set_memlock_rlim, bump_rlimit_memlock), btf.c (BTF parsing and raw bytes)
+libbpf.c	025be63c78cb7bad472368d4c3027c7cf50a591e80d87ff9e6112ff934b8c59b
+features.c	11192e1398c3b0b0ff92955bd52bfc536f97be2c1749dfb0a6e5ea3dcb8c9717
+libbpf_internal.h	7f701ba76b84482fed1c22e8fdfad7908dec1e49326eb9a3345c1bd349f51c72
+bpf.c	82b96dcf4e19209256e488fa798c1e2ffb6ffd28bb2ff655a4d06a31fcf6eaf9
+btf.c	9f7a6ab23b79d8efc8fdf1663a99960cfdbfce7030a275a300f80482364335e2

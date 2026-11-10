@@ -1,0 +1,34 @@
+bpf-mlir-loader
+Copyright (c) 2026 Yusuke Shinozaki
+
+bpf-mlir-loader is licensed under Apache-2.0 WITH LLVM-exception. See LICENSE.
+
+Fetched dependencies, not included in this source tree (git submodules). Their
+license texts are copied in LICENSES/ and scripts/build-libs.sh copies them into
+its output with a generated NOTICE:
+- libbpf v1.7.0: LGPL-2.1 OR BSD-2-Clause.
+- elfutils libelf 0.196: GPL-2.0-or-later OR LGPL-3.0-or-later.
+- zlib 1.3.2: zlib license.
+- bpf-mlir: Apache-2.0 WITH LLVM-exception. Used only for the conformance corpus
+  in the tests, not by the product build.
+
+Conditions for distributing binaries that statically link libelf
+
+scripts/build-libs.sh links libelf statically. This repository distributes source
+only. If you distribute a binary that contains libelf and choose LGPL-3.0 for
+libelf, the license asks you to:
+- provide the corresponding source of libelf (elfutils 0.196) and its license
+  texts;
+- accompany the binary with copies of the GNU GPL version 3 and the GNU LGPL
+  version 3 (LICENSES/elfutils-libelf.GPL-3.0 and
+  LICENSES/elfutils-libelf.LGPL-3.0);
+- let the recipient replace libelf with a modified version and relink, for example
+  by providing the object files of your program.
+
+If you use libbpf under BSD-2-Clause, its copyright notice and conditions
+(LICENSES/libbpf.BSD-2-Clause) must appear in the documentation of a distributed
+binary. Shipping the NOTICE and LICENSES/ that scripts/build-libs.sh writes to
+build/libs with that documentation covers this notice and the zlib notice.
+
+This is a summary and not legal advice. The authoritative text is COPYING-LGPLV3
+in the elfutils source and each license text in LICENSES/.

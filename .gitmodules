@@ -1,0 +1,12 @@
+[submodule "third_party/bpf-mlir"]
+	path = third_party/bpf-mlir
+	url = https://github.com/yuskesh/bpf-mlir
+[submodule "third_party/libbpf"]
+	path = third_party/libbpf
+	url = https://github.com/libbpf/libbpf.git
+[submodule "third_party/elfutils"]
+	path = third_party/elfutils
+	url = https://sourceware.org/git/elfutils.git
+[submodule "third_party/zlib"]
+	path = third_party/zlib
+	url = https://github.com/madler/zlib.git
