@@ -1,4 +1,3 @@
-
 #ifndef BML_BTF_STRUCTOPS_H
 #define BML_BTF_STRUCTOPS_H
 

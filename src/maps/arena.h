@@ -1,4 +1,3 @@
-
 #ifndef BML_MAPS_ARENA_H
 #define BML_MAPS_ARENA_H
 #include <stddef.h>

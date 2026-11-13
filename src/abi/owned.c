@@ -1,5 +1,3 @@
-
-
 #include "abi/map_internal.h"
 
 #include <stdlib.h>

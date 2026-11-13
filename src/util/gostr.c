@@ -1,4 +1,3 @@
-
 #include "util/gostr.h"
 #include "util/mutation.h"
 

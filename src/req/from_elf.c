@@ -1,5 +1,3 @@
-
-
 #include "req/from_elf.h"
 
 #include <stdlib.h>
@@ -20,6 +18,7 @@ int bml_req_from_elf(const void *data, size_t len, struct bml_requirements **out
 	if (len < 24) {
 		e->stage = BML_REQ_ELF_OPEN;
 		e->msg = strdup("ELF header: EOF");
+		e->go_text = 1;
 		return -1;
 	}
 	const uint8_t *h = data;
@@ -31,6 +30,7 @@ int bml_req_from_elf(const void *data, size_t len, struct bml_requirements **out
 			struct bml_buf b = {0};
 			bml_buf_addf(&b, "ELF e_version is %#x, want 1 (EV_CURRENT — all 4 bytes)", v);
 			e->msg = bml_buf_take(&b);
+			e->go_text = 1;
 			return -1;
 		}
 	}

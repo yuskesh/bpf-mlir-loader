@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include "util/gostr.h"
 #include "util/mutation.h"

@@ -1,4 +1,3 @@
-
 #ifndef BML_CAPS_LIVE_ARENA_H
 #define BML_CAPS_LIVE_ARENA_H
 #include "caps/live.h"

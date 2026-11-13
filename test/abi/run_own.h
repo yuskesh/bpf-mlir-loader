@@ -1,6 +1,3 @@
-
-
-
 #ifndef BML_TEST_RUN_OWN_H
 #define BML_TEST_RUN_OWN_H
 

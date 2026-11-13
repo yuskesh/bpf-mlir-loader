@@ -17,11 +17,21 @@ git submodule update --init third_party/libbpf third_party/elfutils third_party/
 scripts/build-libs.sh
 ```
 
-`build/libs` then holds `lib/libbml.a`, `lib/libbml_spinel.a`, `lib/libbpf.a`,
-`lib/libelf.a`, `lib/libz.a`, the headers in `include/`, and `LICENSES/` and
-`NOTICE` for the statically linked components.
+`build/libs` then holds `lib/libbml.a`, `lib/libbml_spinel.a`, `lib/libbml_build.a`,
+`lib/libbpf.a`, `lib/libelf.a`, `lib/libz.a`, the headers in `include/`, and
+`LICENSES/` and `NOTICE` for the statically linked components.
 
 Link order: `libbml.a libbpf.a libelf.a libz.a`.
+
+`lib/libbml_build.a` and `include/bml/build.h` are the build-time exports. They
+check and decode JSON and requirements as bpf-mlir's Go code does, for a build
+that has no Go. Link order: `libbml_build.a libbml.a libbpf.a libelf.a libz.a`.
+
+`bml_version()` and the version facts in `bml.h` describe the build. In this
+tree, `bml_bpf_mlir_commit()` reads `PINS`. `PINS` names the bpf-mlir development
+commit whose load contract this release implements. It is not the revision that
+`third_party/bpf-mlir` checks out: that is the public bpf-mlir release that
+supplies the test corpus.
 
 ## Test
 

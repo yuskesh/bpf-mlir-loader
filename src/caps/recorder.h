@@ -1,8 +1,3 @@
-
-
-
-
-
 #ifndef BML_CAPS_RECORDER_H
 #define BML_CAPS_RECORDER_H
 

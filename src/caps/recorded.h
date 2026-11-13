@@ -1,4 +1,3 @@
-
 #ifndef BML_RECORDED_H
 #define BML_RECORDED_H
 

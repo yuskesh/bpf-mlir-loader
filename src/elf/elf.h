@@ -1,8 +1,3 @@
-
-
-
-
-
 #ifndef BML_ELF_H
 #define BML_ELF_H
 

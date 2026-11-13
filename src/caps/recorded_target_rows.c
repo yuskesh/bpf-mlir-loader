@@ -1,4 +1,3 @@
-
 #include "caps/recorded_internal.h"
 
 #include <stdint.h>

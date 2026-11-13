@@ -1,6 +1,3 @@
-
-
-
 #include "btf/structops.h"
 
 #include <stdio.h>

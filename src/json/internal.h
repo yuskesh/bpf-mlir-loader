@@ -1,4 +1,3 @@
-
 #ifndef BML_JSON_INTERNAL_H
 #define BML_JSON_INTERNAL_H
 

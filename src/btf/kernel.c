@@ -1,5 +1,3 @@
-
-
 #include "btf/kernel.h"
 
 #include <errno.h>

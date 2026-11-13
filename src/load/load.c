@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include "load/internal.h"
 #include "load/arena.h"

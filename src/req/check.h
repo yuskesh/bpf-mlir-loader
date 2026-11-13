@@ -1,5 +1,3 @@
-
-
 #ifndef BML_CHECK_H
 #define BML_CHECK_H
 

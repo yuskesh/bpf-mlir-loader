@@ -1,6 +1,3 @@
-
-
-
 #include "shim/spinel/internal.h"
 
 #include <stdlib.h>

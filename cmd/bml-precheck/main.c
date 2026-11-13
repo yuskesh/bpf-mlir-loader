@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 #include "bml-precheck/precheck.h"
 
 #include <errno.h>

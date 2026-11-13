@@ -1,4 +1,3 @@
-
 #define _GNU_SOURCE
 #include "caps/value_sources.h"
 #include "caps/live_internal.h"

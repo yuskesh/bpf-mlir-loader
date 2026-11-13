@@ -1,4 +1,3 @@
-
 #ifndef BML_CAPS_LIVE_CAPS_H
 #define BML_CAPS_LIVE_CAPS_H
 

@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include "caps/live_caps.h"
 

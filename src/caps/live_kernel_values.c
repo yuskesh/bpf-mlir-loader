@@ -1,4 +1,3 @@
-
 #include "caps/live_internal.h"
 
 #include <errno.h>

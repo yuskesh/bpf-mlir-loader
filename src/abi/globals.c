@@ -1,9 +1,3 @@
-
-
-
-
-
-
 #define _GNU_SOURCE
 #include "abi/internal.h"
 

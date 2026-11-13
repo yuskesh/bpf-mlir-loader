@@ -1,6 +1,3 @@
-
-
-
 #include "caps/caps.h"
 
 #include <errno.h>

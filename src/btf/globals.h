@@ -1,5 +1,3 @@
-
-
 #ifndef BML_BTF_GLOBALS_H
 #define BML_BTF_GLOBALS_H
 

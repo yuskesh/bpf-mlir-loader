@@ -1,5 +1,3 @@
-
-
 #ifndef BML_MAPDECL_H
 #define BML_MAPDECL_H
 
@@ -73,6 +71,8 @@ int bml_map_decls_parse(const char *data, size_t len, struct bml_map_decls *out,
 
 int bml_map_decls_parse_rule(const char *data, size_t len, struct bml_map_decls *out, char **err, enum bml_json_rule *rule);
 void bml_map_decls_free(struct bml_map_decls *d);
+
+const struct bml_json_desc *bml_map_decls_desc(void);
 
 int bml_map_decl_parse_one(const char *data, size_t len, struct bml_map_decl *out, char **err);
 void bml_map_decl_free(struct bml_map_decl *x);

@@ -37,6 +37,20 @@ extern "C" {
 const char *bml_version(void);
 /* Policy version (the same as requirements.PolicyVersion in bpf-mlir) */
 int64_t bml_policy_version(void);
+/* Largest requirements format version this library reads (the same as requirements.MaxFormatVersion in bpf-mlir) */
+int64_t bml_max_format_version(void);
+
+/* Version facts stamped by scripts/build-libs.sh. They are build provenance, not proof of what the code does.
+ * bml_source_form: "dev" (built from a git checkout of bml), "public" (from a tree with SOURCE_VERSION and PINS) or "none"
+ * (neither; the commits are then "unknown" and dirty is -1). Strings are static storage; do not free. */
+const char *bml_source_form(void);
+/* The bml source commit: 40 lowercase hex digits (dev: git HEAD; public: SOURCE_VERSION's source_commit), or "unknown" */
+const char *bml_source_commit(void);
+/* 1 if the bml tree had changes (tracked, untracked or submodule) when built, 0 if clean, -1 if unknown (no git) */
+int bml_source_dirty(void);
+/* The bpf-mlir commit this bml pins (dev: the third_party/bpf-mlir gitlink in HEAD; public: PINS), or "unknown".
+ * It names the contract bml copies; bml compiles no bpf-mlir source. */
+const char *bml_bpf_mlir_commit(void);
 
 /* ---- Results ---- */
 int64_t bml_result_kind(int64_t r);

@@ -1,7 +1,3 @@
-
-
-
-
 #ifndef BML_CAPS_LIVE_INTERNAL_H
 #define BML_CAPS_LIVE_INTERNAL_H
 

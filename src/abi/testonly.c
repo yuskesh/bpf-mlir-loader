@@ -1,6 +1,3 @@
-
-
-
 #ifdef BML_TEST_CAPS
 #define _GNU_SOURCE
 #include "abi/internal.h"

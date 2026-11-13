@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include "util/mutation.h"
 #include "btf/kernel.h"

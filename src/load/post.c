@@ -1,6 +1,3 @@
-
-
-
 #include "load/internal.h"
 
 #include <errno.h>

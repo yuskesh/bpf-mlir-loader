@@ -1,6 +1,3 @@
-
-
-
 #include "req/parse_internal.h"
 
 #include <stdint.h>

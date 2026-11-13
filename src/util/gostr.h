@@ -1,6 +1,3 @@
-
-
-
 #ifndef BML_GOSTR_H
 #define BML_GOSTR_H
 

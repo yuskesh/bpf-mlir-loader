@@ -1,4 +1,3 @@
-
 #include "maps/internal.h"
 
 #include <stdarg.h>

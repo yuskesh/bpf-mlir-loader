@@ -1,8 +1,3 @@
-
-
-
-
-
 #include "dwarf/internal.h"
 
 #include <stdio.h>

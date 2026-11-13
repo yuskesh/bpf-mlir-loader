@@ -1,5 +1,3 @@
-
-
 #include "caps/recorder_internal.h"
 
 #include <stdlib.h>

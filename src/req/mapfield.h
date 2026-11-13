@@ -1,5 +1,3 @@
-
-
 #ifndef BML_MAPFIELD_H
 #define BML_MAPFIELD_H
 

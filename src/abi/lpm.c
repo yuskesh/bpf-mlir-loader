@@ -1,13 +1,3 @@
-
-
-
-
-
-
-
-
-
-
 #define _GNU_SOURCE
 #include "abi/map_internal.h"
 

@@ -1,5 +1,3 @@
-
-
 #include "caps/live_internal.h"
 
 #include <stdlib.h>

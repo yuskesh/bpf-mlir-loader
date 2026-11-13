@@ -1,6 +1,3 @@
-
-
-
 #include "req/kfunc_profile.h"
 
 #include <stdio.h>

@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
+if [ -n "${BML_STAMP_MUT+x}" ]; then
+  echo "build-libs: BML_STAMP_MUT is set (a test hook; unset it)" >&2
+  exit 1
+fi
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+. "$HERE/scripts/stamp-lib.sh"
 OUT="${1:-$HERE/build/libs}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -11,7 +16,7 @@ export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$HERE" log -1 --format=
 export LC_ALL=C TZ=UTC
 export ARFLAGS=crD
 
-rm -rf "$OUT/zlib" "$OUT/elfutils" "$OUT/libbpf" "$OUT/bml" "$OUT/bml_spinel" "$OUT/lib" "$OUT/include" "$OUT/log"
+rm -rf "$OUT/zlib" "$OUT/elfutils" "$OUT/libbpf" "$OUT/bml" "$OUT/bml_spinel" "$OUT/bml_build" "$OUT/lib" "$OUT/include" "$OUT/log" "$OUT/stamp"
 mkdir -p "$OUT/lib" "$OUT/include" "$OUT/log"
 
 step() {
@@ -25,6 +30,7 @@ step() {
   fi
 }
 
+build_body() {
 Z="$OUT/zlib"
 mkdir -p "$Z"
 Z_CFLAGS="-O2 -g -D_LARGEFILE64_SOURCE=1 -DHAVE_HIDDEN -ffile-prefix-map=$HERE/third_party/zlib=zlib -ffunction-sections -fdata-sections"
@@ -69,7 +75,7 @@ fi
 
 B="$OUT/bml"
 mkdir -p "$B"
-BML_CFLAGS="-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffile-prefix-map=$HERE=bml -ffile-prefix-map=$OUT=out -ffunction-sections -fdata-sections -I$HERE/src -I$HERE/include -I$HERE/third_party/libbpf/include/uapi -I$OUT/include"
+BML_CFLAGS="-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffile-prefix-map=$HERE=bml -ffile-prefix-map=$OUT=out -ffunction-sections -fdata-sections -I$HERE/src -I$HERE/include -I$HERE/third_party/libbpf/include/uapi -I$OUT/include -I$OUT/stamp"
 rm -f "$B"/*.o
 for c in $("$HERE/scripts/srcs.sh" src); do
   obj=$(printf '%s' "${c#"$HERE"/src/}" | tr / _)
@@ -87,9 +93,19 @@ done
 ar crD "$OUT/lib/libbml_spinel.a" $(ls "$S"/*.o | LC_ALL=C sort)
 cp "$HERE/shim/spinel/spinelbpf.h" "$OUT/include/bml/"
 
+S="$OUT/bml_build"
+rm -rf "$S"; mkdir -p "$S"
+for c in $(find "$HERE/shim/build" -name '*.c' | LC_ALL=C sort); do
+  gcc $BML_CFLAGS -I"$HERE" -c "$c" -o "$S/build_$(basename "${c%.c}").o"
+done
+ar crD "$OUT/lib/libbml_build.a" $(ls "$S"/*.o | LC_ALL=C sort)
+cp "$HERE/shim/build/build.h" "$OUT/include/bml/"
+
 if [ -n "$(git -C "$HERE/third_party/elfutils" status --porcelain)$(git -C "$HERE/third_party/zlib" status --porcelain)" ]; then
   echo "build-libs: third_party/elfutils or zlib has uncommitted changes after the build" >&2; exit 1
 fi
+}
+bml_stamp_guarded "$HERE" "$OUT/stamp" build_body
 
 L="$OUT/LICENSES"
 rm -rf "$L"

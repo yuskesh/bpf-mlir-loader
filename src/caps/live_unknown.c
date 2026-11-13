@@ -1,4 +1,3 @@
-
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 #include "util/gostr.h"

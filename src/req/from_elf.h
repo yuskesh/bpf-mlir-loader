@@ -1,4 +1,3 @@
-
 #ifndef BML_REQ_ELF_H
 #define BML_REQ_ELF_H
 
@@ -16,6 +15,9 @@ enum bml_req_elf_stage {
 struct bml_req_elf_error {
 	enum bml_req_elf_stage stage;
 	char *msg;
+	
+
+	int go_text;
 	struct bml_parse_error parse;
 };
 

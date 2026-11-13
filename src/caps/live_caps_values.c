@@ -1,4 +1,3 @@
-
 #include "caps/live_caps.h"
 
 static int enum_value(void *ctx, const char *en, const char *name, uint64_t *out, char **msg)

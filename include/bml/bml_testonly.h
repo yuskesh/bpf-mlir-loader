@@ -1,6 +1,3 @@
-
-
-
 #ifndef BML_BML_TESTONLY_H
 #define BML_BML_TESTONLY_H
 

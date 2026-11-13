@@ -1,7 +1,3 @@
-
-
-
-
 #include "load/internal.h"
 
 #include <stdio.h>

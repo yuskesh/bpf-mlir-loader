@@ -1,4 +1,3 @@
-
 #ifndef BML_GOPATH_H
 #define BML_GOPATH_H
 

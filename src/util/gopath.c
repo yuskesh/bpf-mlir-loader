@@ -1,5 +1,3 @@
-
-
 #include "util/gopath.h"
 
 #include <stdlib.h>

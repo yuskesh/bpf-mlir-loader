@@ -1,4 +1,3 @@
-
 #ifndef BML_CAPS_VALUE_SOURCES_H
 #define BML_CAPS_VALUE_SOURCES_H
 

@@ -1,5 +1,3 @@
-
-
 #include "req/check_internal.h"
 
 #include <stdio.h>

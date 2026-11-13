@@ -1,5 +1,3 @@
-
-
 #include "req/from_elf.h"
 
 #include <stdlib.h>

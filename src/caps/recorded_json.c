@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 #include "caps/recorded_internal.h"
 
 #include <errno.h>

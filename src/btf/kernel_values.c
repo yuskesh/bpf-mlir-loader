@@ -1,5 +1,3 @@
-
-
 #include "btf/kernel_values.h"
 
 #include <stdlib.h>

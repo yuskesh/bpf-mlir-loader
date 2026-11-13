@@ -1,6 +1,3 @@
-
-
-
 #define _GNU_SOURCE
 #include "util/mutation.h"
 #include "caps/live_internal.h"

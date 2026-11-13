@@ -1,4 +1,3 @@
-
 #include "json/internal.h"
 
 #include <stdarg.h>

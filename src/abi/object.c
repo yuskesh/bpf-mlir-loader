@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include "abi/internal.h"
 #include "abi/rejected.h"
@@ -19,6 +17,12 @@
 int64_t bml_policy_version(void)
 {
 	return BML_POLICY_VERSION;
+}
+
+
+int64_t bml_max_format_version(void)
+{
+	return BML_MAX_FORMAT_VERSION;
 }
 
 

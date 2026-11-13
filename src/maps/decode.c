@@ -1,4 +1,3 @@
-
 #include "maps/internal.h"
 
 #include <stdarg.h>
@@ -488,4 +487,10 @@ int bml_record_decls_parse(const char *data, size_t len, struct bml_map_decls *o
 	if (rc)
 		bml_map_decls_free(out);
 	return rc;
+}
+
+
+const struct bml_json_desc *bml_map_decls_desc(void)
+{
+	return &md_top;
 }

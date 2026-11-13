@@ -1,8 +1,3 @@
-
-
-
-
-
 #include "req/mapfield.h"
 
 #include <stdarg.h>

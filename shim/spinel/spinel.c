@@ -1,5 +1,3 @@
-
-
 #define _GNU_SOURCE
 #include "shim/spinel/internal.h"
 

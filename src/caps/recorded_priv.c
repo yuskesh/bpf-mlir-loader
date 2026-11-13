@@ -1,6 +1,3 @@
-
-
-
 #define _GNU_SOURCE
 #include "caps/recorded_internal.h"
 
