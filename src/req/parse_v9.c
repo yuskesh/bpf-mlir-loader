@@ -1,17 +1,24 @@
+/* req/parse_v9.c — reading the attach rows and the ctxaccess rows of requirements (format version 9). A port of the attach and ctxaccess
+ * branches of Parse in bpf-mlir's go/requirements/requirements.go and of parseAttachTarget, validAttachTypeName and validCName in spec.go;
+ * split out of parse.c.
+ *
+ * A type that is not one of those with companion rows (the 6 types of that time, plus kretprobe / uretprobe from version 9) is a generic
+ * attach row: its type is a UAPI bpf_attach_type name or a mechanism name. Only the spelling is checked here; whether the type exists is
+ * left to the attach_type check. The target is `<kind>` or `<kind>:<value>`. */
 #include "req/parse_internal.h"
 
 #include <string.h>
 
 #include "util/mutation.h"
 
-
+/* the attach types of versions 4 to 8 (before generic attach rows existed) */
 static const char *const legacy_types[] = {"trace_raw_tp", "trace_fentry", "trace_fexit", "kprobe", "uprobe", "tcx"};
 
-
+/* mechanism names that have no expected_attach_type (fixed in version 9); the check does not ask about attach_type for them */
 static const char *const mechanisms[] = {"raw_tp",   "raw_tp_writable", "tracepoint", "socket_filter", "sched_act",
 					 "lwt_in",   "lwt_out",         "lwt_xmit",   "lwt_seg6local", "syscall"};
 
-
+/* the kinds of target (fixed in version 9); value says whether the kind carries a value */
 static const struct {
 	const char *name;
 	int value;
@@ -33,7 +40,7 @@ int req_attach_mechanism(const char *s, size_t n)
 	return in_list((struct field){s, n}, mechanisms, sizeof mechanisms / sizeof *mechanisms);
 }
 
-
+/* validAttachTypeName: [a-z0-9_]+ starting with a lowercase letter */
 int req_valid_attach_type_name(struct field f)
 {
 	if (f.n == 0 || f.p[0] < 'a' || f.p[0] > 'z')
@@ -46,7 +53,7 @@ int req_valid_attach_type_name(struct field f)
 	return 1;
 }
 
-
+/* validCName: a C identifier (it does not start with a digit) */
 static int valid_cname(struct field f)
 {
 	if (f.n == 0 || (f.p[0] >= '0' && f.p[0] <= '9'))
@@ -80,7 +87,7 @@ static int second_attach(const struct bml_requirements *r, struct field program)
 	return 0;
 }
 
-
+/* attachTypeMinVersion: the types of versions 4 to 8 need 4, trace_fmod_ret needs 10, and kretprobe / uretprobe and the generic types need 9 */
 static int64_t attach_type_min_version(struct field t)
 {
 	if (in_list(t, legacy_types, sizeof legacy_types / sizeof *legacy_types))
@@ -89,22 +96,22 @@ static int64_t attach_type_min_version(struct field t)
 		return 10;
 	if (req_v11_attach_type(t))
 		return 11;
-	if (req_v12_attach_type(t))
+	if (req_v12_attach_type(t)) /* format 12 types */
 		return 12;
-	if (req_v13_attach_type(t))
+	if (req_v13_attach_type(t)) /* format 13 types */
 		return 13;
-	if (req_eq(t, "netkit"))
+	if (req_eq(t, "netkit")) /* netkit */
 		return 30;
 	return 9;
 }
 
-
+/* isV13AttachType (format 13) */
 int req_v13_attach_type(struct field t)
 {
 	return req_eq(t, "trace_lsm_cgroup") || req_eq(t, "ksyscall");
 }
 
-
+/* Format 12: the multi family and usdt */
 int req_multi_attach_type(struct field t)
 {
 	return req_eq(t, "kprobe_multi") || req_eq(t, "kretprobe_multi") || req_eq(t, "uprobe_multi") || req_eq(t, "uretprobe_multi");
@@ -115,13 +122,13 @@ int req_v12_attach_type(struct field t)
 	return req_multi_attach_type(t) || req_eq(t, "usdt");
 }
 
-
+/* multiCount: strconv.Atoi can read it and it is at least 1 */
 static int multi_count(struct field s, int64_t *n)
 {
 	return !bml_go_atoi(s.p, s.n, n) && *n >= 1;
 }
 
-
+/* validUSDTTarget: split at the first colon; both sides must be C identifiers */
 static int valid_usdt_target(struct field tg)
 {
 	const char *c = memchr(tg.p, ':', tg.n);
@@ -131,13 +138,13 @@ static int valid_usdt_target(struct field tg)
 	return valid_cname(a) && valid_cname(b);
 }
 
-
+/* Format 11: the types of the companion-row families */
 int req_v11_attach_type(struct field t)
 {
 	return req_eq(t, "trace_lsm") || req_eq(t, "trace_tp") || req_eq(t, "trace_perf") || req_eq(t, "freplace") || req_eq(t, "trace_struct_ops");
 }
 
-
+/* validV11Target: lsm, freplace and struct_ops take a C identifier; tp takes `<cat>/<event>` (both C identifiers); perf takes `perf`. */
 static int valid_v11_target(struct field t, struct field tg)
 {
 	if (req_eq(t, "trace_lsm") || req_eq(t, "freplace") || req_eq(t, "trace_struct_ops"))
@@ -154,18 +161,19 @@ static int valid_v11_target(struct field t, struct field tg)
 	return 0;
 }
 
-
+/* An attach row. Returns 0 when it was read, -1 for an error (stored in e) and -2 when memory runs out. */
 int req_v9_attach(struct bml_requirements *r, struct field *f, struct field line, int n, struct bml_parse_error *e)
 {
 	int generic = !req_known_attach_type(f[2]);
 	if (r->version < 9 && !BML_MUT("parse.v9_rows_any_version")) {
-		if (generic)
+		if (generic) /* before version 9 an unknown type is a value error (as before generic attach rows existed) */
 			return req_perr(e, n, "attach", "value", "%s line %d: bad attach row %q", SEC, (int64_t)n, Q(line));
 		if (!in_list(f[2], legacy_types, sizeof legacy_types / sizeof *legacy_types))
 			return req_perr(e, n, "attach", "min_version", "%s line %d: attach type %q needs version %d", SEC, (int64_t)n, Q(f[2]),
 					attach_type_min_version(f[2]));
 	}
-
+	/* The minimum version of each companion-row family type (trace_fmod_ret needs version 10). The mutation parse.v12_rows_any_version ignores the
+	 * minimum version of the version-12 types. */
 	if (!generic && r->version < attach_type_min_version(f[2]) && !BML_MUT("parse.v9_rows_any_version") &&
 	    !(req_v12_attach_type(f[2]) && BML_MUT("parse.v12_rows_any_version")) && !(req_v13_attach_type(f[2]) && BML_MUT("parse.v13_rows_any_version")) &&
 	    !(req_eq(f[2], "netkit") && BML_MUT("parse.netkit_any_version")))
@@ -176,7 +184,7 @@ int req_v9_attach(struct bml_requirements *r, struct field *f, struct field line
 	if (generic) {
 		if (!req_valid_attach_type_name(f[2]))
 			return req_perr(e, n, "attach", "value", "%s line %d: bad attach row %q", SEC, (int64_t)n, Q(line));
-
+		/* parseAttachTarget: strings.Cut(s, ":") */
 		const char *colon = memchr(f[3].p, ':', f[3].n);
 		kind = (struct field){f[3].p, colon ? (size_t)(colon - f[3].p) : f[3].n};
 		if (colon)
@@ -203,10 +211,10 @@ int req_v9_attach(struct bml_requirements *r, struct field *f, struct field line
 		   (req_multi_attach_type(f[2]) && !multi_count(f[3], &multi_n)) || (req_eq(f[2], "usdt") && !valid_usdt_target(f[3])) ||
 		   (req_v13_attach_type(f[2]) && !valid_cname(f[3]))) {
 		return req_perr(e, n, "attach", "value", "%s line %d: bad attach row %q", SEC, (int64_t)n, Q(line));
-	} else if (req_eq(f[2], "trace_struct_ops") && !has_map(r, f[3])) {
+	} else if (req_eq(f[2], "trace_struct_ops") && !has_map(r, f[3])) { /* the target is a map row of the same ELF (the map row comes first) */
 		return req_perr(e, n, "attach", "order", "%s line %d: attach target map %q is not a map row", SEC, (int64_t)n, Q(f[3]));
 	}
-
+	/* one attach per program */
 	if (second_attach(r, f[1]))
 		return req_perr(e, n, "attach", "order", "%s line %d: program %q has a second attach row", SEC, (int64_t)n, Q(f[1]));
 	if (GROW(r->attaches, r->n_attaches, r->cap_attaches))
@@ -217,7 +225,7 @@ int req_v9_attach(struct bml_requirements *r, struct field *f, struct field line
 	a->ext_nargs = -1;
 	a->generic = generic;
 	a->multi_n = multi_n;
-	r->n_attaches++;
+	r->n_attaches++; /* count first, so that free also sees the contents when mkstr fails */
 	if (req_mkstr(&a->program, f[1]) || req_mkstr(&a->attach_type, f[2]) || req_mkstr(&a->target, f[3]))
 		return -2;
 	if (generic && (req_mkstr(&a->tkind, kind) || req_mkstr(&a->tval, value)))
@@ -225,7 +233,8 @@ int req_v9_attach(struct bml_requirements *r, struct field *f, struct field line
 	return 0;
 }
 
-
+/* A ctxaccess row. It is tied to its program by name: the program row comes first, and a program has one row per field and mode. The return
+ * values 0 / -1 / -2 are as for req_v9_attach. */
 int req_v9_ctxaccess(struct bml_requirements *r, struct field *f, struct field line, int n, struct bml_parse_error *e)
 {
 	if (req_find_program(r, f[1]) < 0)

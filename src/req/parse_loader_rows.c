@@ -1,3 +1,5 @@
+/* Port of the parsing and of the reverse rule of arena.go and datakptr.go. The caller checks the field count and the minimum format
+ * version first. */
 #include "req/parse_internal.h"
 
 #include <string.h>
@@ -46,7 +48,7 @@ int req_parse_loader_row(struct bml_requirements *r, struct field *f,
 	}
 	if (req_grow_array((void **)arr, cap, sizeof(**arr), *count + 1))
 		return -2;
-
+	/* Count first: partial allocations remain owned on the OOM path. */
 	struct bml_str *s = &(*arr)[(*count)++];
 	return req_mkstr(s, f[1]) ? -2 : 0;
 }

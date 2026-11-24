@@ -1,3 +1,9 @@
+/* abi/run_wave1.c — test runs of the first wave of program kinds, which need no attach target: the skb
+ * families, flow_dissector, kinds whose input is a ctx (syscall, raw_tp, sk_lookup), and netfilter.
+ * The kind of a program is decided in one place, from the guard's section table (sec_defs in
+ * load/pre.c, bml_load_section_kind), so adding a kind later only needs a new table row.
+ * Every run repeats once and the value is the return value (int32). Mixing up the kind is BML_STATE;
+ * a length or value that bml itself rules out is BML_VALUE_RANGE; a kernel error is BML_OTHER. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -13,9 +19,9 @@
 #include "util/mutation.h"
 
 #define RUN_FUNCS "test_run_skb_data / test_run_flow_dissector / test_run_ctx_inout / test_run_netfilter / test_run_xdp_data / test_run_tracing"
-#define NF_HOOK_STATE_SIZE 48
+#define NF_HOOK_STATE_SIZE 48 /* the kernel's internal struct nf_hook_state (u8 hook; u8 pf; five pointers, as in the 7.1.8 and 6.6.157 sources) */
 
-
+/* Looks up the program and checks its family. 0 means go on; anything else is a result handle. */
 static int64_t run_prog(int64_t obj, const char *prog, int64_t len, int family, const char *what, struct bpf_program **p, const char **kind)
 {
 	int64_t e;
@@ -94,8 +100,9 @@ static int64_t ctx_body(int64_t obj, const char *prog, int64_t len, uint8_t *ctx
 				(long long)n);
 	if (sys && n > 65535)
 		return abi_fail(BML_VALUE_RANGE, "bml: syscall test run %s: the ctx has %lld bytes, at most 65535", name, (long long)n);
-	
-
+	/* syscall: the kernel writes back into the ctx_in buffer. sk_lookup: the same buffer is passed as ctx_out.
+	 * (The programs bpf-mlir produces do not write the ctx, so a case where the written-back bytes differ
+	 * from the input cannot be made by a test; this is an untested boundary.) */
 	LIBBPF_OPTS(bpf_test_run_opts, t, .ctx_in = ctx, .ctx_size_in = (uint32_t)n);
 	if (skl) {
 		t.ctx_out = ctx;
@@ -135,7 +142,7 @@ static int64_t nf_body(int64_t obj, const char *prog, int64_t len, const uint8_t
 	return abi_ok((int64_t)(int32_t)t.retval);
 }
 
-
+/* ---- public entries (each counts as a running call of the object) ---- */
 #define ENTRY(call)                                                                                                                         \
 	int64_t e;                                                                                                                          \
 	struct abi_object *o = abi_object_acquire(obj, &e);                                                                                 \

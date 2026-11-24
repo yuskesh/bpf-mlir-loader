@@ -24,12 +24,12 @@
 
 struct abi_reader {
 	pthread_mutex_t mu;
-	int64_t obj;
+	int64_t obj; /* The owning object (a read counts as a running call of the object). */
 	struct ring_buffer *rb;
 	char *name;
 	size_t rec_size;
 	int closed;
-
+	/* the copy made by the callback */
 	uint8_t *buf;
 	size_t got_len;
 	int got;
@@ -40,12 +40,12 @@ static int on_sample(void *ctx, void *data, size_t size)
 	struct abi_reader *r = ctx;
 	r->got = 1;
 	r->got_len = size;
-	memcpy(r->buf, data, size < r->rec_size ? size : r->rec_size);
+	memcpy(r->buf, data, size < r->rec_size ? size : r->rec_size); /* a copy: the pointer into the mapping never leaves this file */
 	return 0;
 }
 
-
-
+/* Checks rec_size against the size of the STRUCT in the ELF's BTF that the declared value (record:<S>)
+ * names. The size is checked at open time by design. 0 if they agree; otherwise a result handle. */
 static int64_t record_size_check(const struct abi_map *m, int64_t rec_size)
 {
 	const char *v = m->d.value;
@@ -130,7 +130,7 @@ int64_t bml_ringbuf_read(int64_t reader, int64_t timeout_ms, uint8_t *dst, int64
 	if (!r)
 		return abi_fail(BML_STATE, "bml: no ring buffer reader %lld (open it first)", (long long)reader);
 	int64_t e;
-	struct abi_object *o = NULL;
+	struct abi_object *o = NULL; /* mutation abi.reader_no_inflight: do not count (an object close then waits until the read times out, the earlier form) */
 	if (!BML_MUT("abi.reader_no_inflight") && !(o = abi_object_acquire(r->obj, &e)))
 		return e;
 	pthread_mutex_lock(&r->mu);
@@ -163,7 +163,7 @@ int64_t bml_ringbuf_read(int64_t reader, int64_t timeout_ms, uint8_t *dst, int64
 			if ((rc = ring_buffer__consume_n(r->rb, 1)) != 0)
 				break;
 		}
-		if (rc == 0)
+		if (rc == 0) /* read once after the deadline */
 			rc = ring_buffer__consume_n(r->rb, 1);
 	}
 	if (rc < 0)
@@ -183,12 +183,12 @@ out:
 	return e;
 }
 
-
+/* Closes the reader but keeps it in the table: a second close is OK and a read on a closed reader is STATE. The caller holds the mutex. */
 static void reader_close_locked(struct abi_reader *r)
 {
 	if (!r->closed) {
 		r->closed = 1;
-		ring_buffer__free(r->rb);
+		ring_buffer__free(r->rb); /* unmaps the ring and closes the epoll fd */
 		r->rb = NULL;
 	}
 }
@@ -200,7 +200,7 @@ int64_t bml_ringbuf_close(int64_t reader)
 	abi_unlock();
 	if (!r)
 		return abi_fail(BML_STATE, "bml: no ring buffer reader %lld (open it first)", (long long)reader);
-
+	/* does not wait: STATE if another thread is inside read (mutation abi.reader_close_waits waits, the earlier form) */
 	if (BML_MUT("abi.reader_close_waits"))
 		pthread_mutex_lock(&r->mu);
 	else if (pthread_mutex_trylock(&r->mu) != 0)

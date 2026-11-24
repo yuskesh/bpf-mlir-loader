@@ -1,3 +1,9 @@
+/* shim/spinel/percpu.c — the per-CPU exports of the spinel shim, which follow the per-CPU part of spinel's loader
+ * (loader/main.go and internal/loader/loader.go in the spinel-bpf-mlir sources at commit b3e7fb8): possible_cpus; percpu_get, whose out
+ * holds (number of possible CPUs) x round_up(size, 8) bytes in the kernel's layout, with zeros in the rounding holes
+ * and the Value being the stride; and percpu_put, whose vals holds (number of possible CPUs) x size bytes with no
+ * rounding. The bml_percpu_* functions use the packed form (possible CPUs x size), and this shim widens it to the
+ * stride. */
 #include "shim/spinel/internal.h"
 
 #include <stdlib.h>
@@ -15,7 +21,8 @@ int64_t spinelbpf_possible_cpus(void)
 	return bml_possible_cpus();
 }
 
-
+/* The number of possible CPUs and the value size of the map in the ELF. A map that is not there gets vlen 0, and the
+ * resulting check error is left for bml to report. */
 static void sizes(int64_t obj, const char *name, int64_t *ncpu, int64_t *vlen)
 {
 	int64_t r = bml_possible_cpus();
@@ -26,7 +33,7 @@ static void sizes(int64_t obj, const char *name, int64_t *ncpu, int64_t *vlen)
 	bml_result_free(r);
 }
 
-
+/* The first check of spinel's percpuRow (the map kind) */
 static int64_t percpu_kind(const struct bml_map_decl *d)
 {
 	if (!strcmp(d->kind, "percpu_array") || !strcmp(d->kind, "percpu_hash"))
@@ -62,7 +69,7 @@ int64_t spinelbpf_percpu_get(int64_t obj, char *decl, int64_t *key, int64_t klen
 			else {
 				for (int64_t c = 0; c < ncpu; c++)
 					for (int64_t i = 0; i < stride; i++)
-						out[c * stride + i] = i < vlen ? b[c * vlen + i] : 0;
+						out[c * stride + i] = i < vlen ? b[c * vlen + i] : 0; /* the rounding holes are zero */
 				r = sh_result(BML_OK, stride, "%s", "");
 			}
 		}
@@ -91,7 +98,7 @@ int64_t spinelbpf_percpu_put(int64_t obj, char *decl, int64_t *key, int64_t klen
 		r = bml_percpu_put(obj, S(decl), NULL, 0, NULL, 0, k, klen, vlen, v, n);
 		if (bml_result_kind(r) == BML_OTHER) {
 			struct sh_res x = sh_take(r);
-			if (n != ncpu * vlen && vlen > 0)
+			if (n != ncpu * vlen && vlen > 0) /* spinel reports a size difference as MAP_MISMATCH (bml reports OTHER) */
 				r = sh_result(BML_MAP_MISMATCH, 0, "spinelbpf: %s: %lld bytes of per-CPU values, want %lld CPUs × %lld bytes", d.name, (long long)n,
 					      (long long)ncpu, (long long)vlen);
 			else if (x.msg && strstr(x.msg, "argument list too long"))

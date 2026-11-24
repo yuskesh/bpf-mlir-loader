@@ -1,3 +1,4 @@
+/* shim/build/error.c — the error of the build-time exports, crypto/sha256 and encoding/json's string encoding */
 #include "shim/build/internal.h"
 
 #include <stdint.h>
@@ -27,7 +28,7 @@ void bml_build_strs_free(char **names, size_t n)
 void bml_build_sha256_hex(const void *data, size_t len, char out[65])
 {
 	bml_sha256_hex(data ? data : "", len, out);
-	if (BML_MUT("build.sha_flip")) {
+	if (BML_MUT("build.sha_flip")) { /* the first byte xor 1: its low hex digit */
 		unsigned v = (unsigned)(out[1] <= '9' ? out[1] - '0' : out[1] - 'a' + 10) ^ 1u;
 		out[1] = "0123456789abcdef"[v];
 	}
@@ -45,10 +46,10 @@ void bml_build_sha256(const void *data, size_t len, unsigned char out[32])
 	}
 }
 
-
-
-
-
+/* encoding/json/internal/jsonwire.AppendQuote with Go 1.27's v1 flags (EscapeForJS; EscapeForHTML for json.Marshal): \" \\ \b
+ * \f \n \r \t, other control bytes \u00xx, < > & as < > & when html, U+2028 / U+2029 as   /  , each
+ * invalid UTF-8 byte as the raw replacement character U+FFFD (its 3 UTF-8 bytes, not an escape). bml's product writer
+ * (json/write.c) is older Go's form; the build export follows the Go a build runs today. */
 static size_t utf8_seq(const unsigned char *s, size_t n)
 {
 	unsigned c = s[0];

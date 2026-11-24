@@ -1,3 +1,6 @@
+// cmd/bml-precheck/live.c — --live (opens the --binary files, as the Go reference's newLiveCaps does) and
+// --record (writes caps.json).
+
 #define _GNU_SOURCE
 #include "bml-precheck/precheck.h"
 
@@ -22,7 +25,9 @@ static char *errno_msg(const char *op, const char *path, int err)
 char *pc_open_live(const struct flags *f, const struct bml_loader_decl *decl, struct bml_live_caps *lc, struct bml_caps *caps)
 {
 	lc->decl = decl;
-
+	/* Handle --ext-target first, in the order of the Go reference's newLiveCaps. A replacement target (the program an
+	 * "ext" program replaces) that cannot be read is not an error here: it is remembered, and the check later
+	 * reports it as ext_target_unknown. */
 	if (f->n_ext_target) {
 		lc->exts = calloc((size_t)f->n_ext_target, sizeof *lc->exts);
 		if (!lc->exts)
@@ -50,7 +55,7 @@ char *pc_open_live(const struct flags *f, const struct bml_loader_decl *decl, st
 	}
 	for (int i = 0; i < f->n_binary; i++) {
 		const char *b = f->binary[i], *eq = strchr(b, '=');
-		if (!eq || eq == b || !eq[1]) {
+		if (!eq || eq == b || !eq[1]) { /* Go's strings.Cut did not succeed, or the program or the path is empty */
 			struct bml_buf m = {0};
 			bml_buf_adds(&m, "--binary ");
 			bml_buf_add_goquote(&m, b, strlen(b));
@@ -67,7 +72,8 @@ char *pc_open_live(const struct flags *f, const struct bml_loader_decl *decl, st
 		if (!x->program || !x->path)
 			return strdup("out of memory");
 	}
-
+	/* The Go reference's liveCaps.configureDebug: the debug root is always set (default /usr/lib/debug), and each
+	 * --debug program=path is made absolute (a program given twice is an error). */
 	lc->debug_root = strdup(f->debug_root_set ? f->debug_root : "/usr/lib/debug");
 	lc->debugs = f->n_debug ? calloc((size_t)f->n_debug, sizeof *lc->debugs) : NULL;
 	if (!lc->debug_root || (f->n_debug && !lc->debugs))

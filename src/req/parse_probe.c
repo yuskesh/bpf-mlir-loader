@@ -1,3 +1,8 @@
+/* req/parse_probe.c — the companion rows of the probe families: arch, ctxfield, binary, kprobearg and uprobearg (split out of parse.c, which had
+ * reached 500 lines). The families are kprobe, uprobe, kretprobe and uretprobe (format 9), the multi families and usdt (format 12), and ksyscall
+ * (format 13). binary belongs to the uprobe families, kprobearg to kprobe and kprobe_multi, and uprobearg to uprobe and uprobe_multi. An arch,
+ * ctxfield or binary row after a row of format 12 / 13 (mtarget, usdtsem, usdtarg, sysarg), and a kprobearg / uprobearg row after mtargetarg,
+ * is an order error. */
 #include "req/parse_internal.h"
 
 #include <stdint.h>
@@ -5,7 +10,7 @@
 
 #include "util/mutation.h"
 
-
+/* Returns 0 when the row was read, -1 for an error (stored in e) and -2 when memory runs out. */
 int req_probe_companion(struct bml_requirements *r, struct field *f, struct field line, int n, const char *row, struct bml_parse_error *e)
 {
 	struct bml_attach *a = r->n_attaches ? &r->attaches[r->n_attaches - 1] : NULL;
@@ -18,7 +23,7 @@ int req_probe_companion(struct bml_requirements *r, struct field *f, struct fiel
 		req_perr(e, n, row, "order", "%s line %d: %s row out of order %q", SEC, (int64_t)n, row, Q(line));
 		return -1;
 	}
-
+	/* Format 13: a row after sysarg or after mtargetarg is also an order error */
 	int v12before = a->n_mtargets == 0 && a->usdt_sem.len == 0 && a->n_usdt_args == 0 && a->n_sys_args == 0;
 	int mt_complete = (!req_multi_str(&a->attach_type) || (int64_t)a->n_mtargets == a->multi_n) && a->n_mtarget_args == 0;
 	int in_order = 0;
@@ -31,7 +36,7 @@ int req_probe_companion(struct bml_requirements *r, struct field *f, struct fiel
 		in_order = a->arch.len != 0 && a->n_uprobe_args == 0 && v12before;
 	else if (req_eq(f[0], "kprobearg"))
 		in_order = a->arch.len != 0 && mt_complete;
-	else
+	else /* uprobearg */
 		in_order = a->binary_sha256.len != 0 && mt_complete;
 	if (!in_order) {
 		req_perr(e, n, row, "order", "%s line %d: %s row out of order %q", SEC, (int64_t)n, row, Q(line));
@@ -54,7 +59,7 @@ int req_probe_companion(struct bml_requirements *r, struct field *f, struct fiel
 			req_perr(e, n, row, "value", "%s line %d: bad uprobearg row %q", SEC, (int64_t)n, Q(line));
 			return -1;
 		}
-
+		/* ptr (a pointer of depth 1, 8 bytes) exists from format 18 on; this is checked after the value check, as in Go. */
 		if (req_eq(f[3], "ptr") && r->version < 18 && !BML_MUT("parse.v18_rows_any_version")) {
 			req_perr(e, n, row, "min_version", "%s line %d: uprobearg type ptr needs version 18", SEC, (int64_t)n);
 			return -1;
@@ -96,9 +101,9 @@ int req_probe_companion(struct bml_requirements *r, struct field *f, struct fiel
 		if (req_mkstr(&c->strct, f[2]) || req_mkstr(&c->field, f[3]))
 			return -2;
 		a->n_ctxfields++;
-	} else {
+	} else { /* kprobearg */
 		int64_t na;
-
+		/* since v0.18.0: ptr is a pointer argument (an 8-byte raw value that is not dereferenced; the check verifies that the target's argument is a pointer) */
 		if (bml_go_atoi(f[2].p, f[2].n, &na) || na < 1 || !(req_valid_int_spelling(f[3]) || req_eq(f[3], "ptr"))) {
 			req_perr(e, n, row, "value", "%s line %d: bad kprobearg row %q", SEC, (int64_t)n, Q(line));
 			return -1;

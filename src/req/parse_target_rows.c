@@ -1,3 +1,5 @@
+/* req/parse_target_rows.c — a port of helper_target.go and of the sleepable row of Parse in bpf-mlir's go/requirements.
+ * Returns 0 when the row was read, -1 for an error (stored in e) and -2 when memory runs out (as for req_v9_attach). */
 #include "req/parse_internal.h"
 
 #include <stdlib.h>
@@ -5,7 +7,7 @@
 
 #include "util/mutation.h"
 
-
+/* validHelperTargetSymbol: starts with a letter or _, and continues with letters, digits, _ and . */
 static int valid_symbol(struct field s)
 {
 	if (s.n == 0)
@@ -21,7 +23,7 @@ static int valid_symbol(struct field s)
 	return 1;
 }
 
-
+/* helperTargetBound: whether the row is tied to an earlier program (tracing/26), helper, attach and farg row */
 int req_helper_target_bound(const struct bml_requirements *r, const struct bml_str *program, const struct bml_str *helper, int64_t helper_id,
 			    const struct bml_str *attach_type, const struct bml_str *target, int64_t arg_index, const struct bml_str *arg_type)
 {
@@ -52,7 +54,7 @@ int req_helper_target_bound(const struct bml_requirements *r, const struct bml_s
 	return 0;
 }
 
-
+/* helperTargetOrder order: compares the fields joined by NUL as byte sequences (like >= on Go strings) */
 static char *order_key(struct field *f, size_t *n)
 {
 	struct field parts[] = {f[1], f[3], f[4], f[5], f[6], f[7]};
@@ -75,7 +77,7 @@ static char *order_key(struct field *f, size_t *n)
 
 static int helper_target_row(struct bml_requirements *r, struct field *f, struct field line, int n, struct bml_parse_error *e)
 {
-
+	/* validHelperTarget and the check of the FormatInt / Itoa spelling (the id is only 147 and the arg is only 0) */
 	if (!(req_eq(f[2], "d_path") && req_eq(f[3], "147") && req_eq(f[4], "trace_fentry") && req_eq(f[6], "0") && req_eq(f[7], "path") &&
 	      valid_symbol(f[5])) && !BML_MUT("parse.helper_target_any_value"))
 		return req_perr(e, n, "helper_target", "value", "%s line %d: unsupported helper_target row %q", SEC, (int64_t)n, Q(line));
@@ -126,7 +128,7 @@ bad:
 	return -1;
 }
 
-
+/* sleepable <program>: once, directly after the attach row of that trace_fentry and before farg */
 static int sleepable_row(struct bml_requirements *r, struct field *f, struct field line, int n, int after_attach, struct bml_parse_error *e)
 {
 	struct bml_attach *a = r->n_attaches ? &r->attaches[r->n_attaches - 1] : NULL;

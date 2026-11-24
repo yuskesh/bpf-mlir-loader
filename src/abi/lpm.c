@@ -1,3 +1,20 @@
+/* abi/lpm.c — user-space operations on an lpm_trie (IPv4). These are the downstream C ABI's group of
+ * lpm_trie operations; the Go version of the logic is the downstream loader's lpm.go.
+ * - A prefix or address string is read by the same rules as Go's net/netip ParsePrefix and ParseAddr:
+ *   each IPv4 field is 0 to 255 with no leading zero, there are exactly four fields, and the prefix
+ *   length is 0 to 32 (with two or more digits, no leading zero and no sign). IPv6, a malformed
+ *   string, and a prefix with host bits set give BML_OTHER without touching the kernel (the kernel
+ *   would keep the bits outside the prefix length and return them when iterating, so the loader
+ *   never silently turns it into a different key).
+ * - put returns a status as the value (0, or -ENOSPC when the map is full and the prefix is new);
+ *   remove does too (0, or -ENOENT). Any other error is BML_OTHER and is not folded into the status.
+ * - match is the kernel's longest-prefix match (a LOOKUP with a key of prefixlen 32); the message is
+ *   "found" with the value's bits, or "absent".
+ * - list writes every prefix and value into the message, one "a.b.c.d/n <bits>" line each, in byte
+ *   order (like Go's sort.Strings); the value is the number of lines.
+ * - The declaration must have kind lpm_trie, a key record of 8 bytes (prefixlen u32, addr [4]u8; the
+ *   record name comes from the key of the declaration), and a value of u32 / i32 (4 bytes) or
+ *   anything else (8 bytes). */
 #define _GNU_SOURCE
 #include "abi/map_internal.h"
 
@@ -13,7 +30,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* The equivalent of parseIPv4Fields in Go's netip. Success is 0; failure is -1 with *why (a static message). */
 static int parse_v4(const char *s, size_t n, uint8_t out[4], const char **why)
 {
 	int val = 0, pos = 0, dig = 0;
@@ -42,7 +59,7 @@ static int parse_v4(const char *s, size_t n, uint8_t out[4], const char **why)
 	return 0;
 }
 
-
+/* ParsePrefix: success is 0 with addr and bits; failure is a result handle (BML_OTHER, naming how to fix it). */
 static int64_t parse_prefix(const char *what, const char *s, int64_t n, uint8_t addr[4], int *bits)
 {
 	if (n < 0 || (!s && n))
@@ -107,11 +124,11 @@ static size_t val_len(const struct abi_map *m)
 	return !strcmp(m->d.value, "u32") || !strcmp(m->d.value, "i32") ? 4 : 8;
 }
 
-
+/* Checks the declaration and opens the lpm_trie (the key record has the declared name and is 8 bytes: prefixlen and addr). */
 static int64_t open_lpm(int64_t obj, const char *decl, int64_t dl, struct abi_map *m)
 {
 	static const char *const kinds[] = {"lpm_trie", NULL};
-
+	/* Read the name of the key record from the declaration first (to build the records document); abi_map_open_kind names a declaration that cannot be read. */
 	char rec[512] = "";
 	struct bml_json *j = NULL;
 	char *jerr = NULL;
@@ -119,7 +136,7 @@ static int64_t open_lpm(int64_t obj, const char *decl, int64_t dl, struct abi_ma
 		const struct bml_json *k = j->type == BML_JSON_OBJECT ? bml_json_get(j, "key") : NULL;
 		if (k && k->type == BML_JSON_STRING && k->len > 7 && k->len < 200 && !strncmp(k->str, "record:", 7)) {
 			struct bml_buf nm = {0};
-			bml_json_write_string(&nm, k->str + 7, k->len - 7);
+			bml_json_write_string(&nm, k->str + 7, k->len - 7); /* write the name back as a JSON string */
 			snprintf(rec, sizeof rec,
 				 "{%.*s:{\"size\":8,\"members\":[{\"name\":\"prefixlen\",\"offset\":0,\"type\":\"u32\"},{\"name\":\"addr\",\"offset\":4,\"type\":\"[4]u8\"}]}}",
 				 (int)nm.len, nm.p ? nm.p : "\"\"");
@@ -144,7 +161,7 @@ static int64_t open_lpm(int64_t obj, const char *decl, int64_t dl, struct abi_ma
 static void key_of(uint8_t k[8], const uint8_t addr[4], int bits)
 {
 	uint32_t b = (uint32_t)bits;
-	memcpy(k, &b, 4);
+	memcpy(k, &b, 4); /* little endian (x86_64 only) */
 	memcpy(k + 4, addr, 4);
 }
 
@@ -236,7 +253,7 @@ int64_t bml_lpm_list(int64_t obj, const char *decl, int64_t dl)
 	uint8_t k[8], nk[8];
 	int first = 1, err = 0;
 	for (uint32_t step = 0;; step++) {
-		if (step > bpf_map__max_entries(m.map)) {
+		if (step > bpf_map__max_entries(m.map)) { /* the same as cilium's MapIterator: stop on a map that keeps changing */
 			err = -1;
 			break;
 		}
@@ -249,7 +266,7 @@ int64_t bml_lpm_list(int64_t obj, const char *decl, int64_t dl)
 		uint64_t v = 0;
 		if (bpf_map_lookup_elem(m.fd, k, &v) != 0) {
 			if (errno == ENOENT)
-				continue;
+				continue; /* a concurrent delete is skipped (as in cilium) */
 			err = errno;
 			break;
 		}

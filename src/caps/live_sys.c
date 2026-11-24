@@ -1,3 +1,6 @@
+/* caps/live_sys.c — what the live caps probes share: the bpf(2) wrapper (cilium's sys.BPF), the lines of ErrorWithLog, program loading
+ * (the steps of NewProgramWithOptions), the BTF handle (NewHandleFromRawBTF) and kload's memo.
+ * Resolving the attach target (findProgramTargetInKernel) is part of the load steps, so it lives here too. */
 #define _GNU_SOURCE
 #include "util/mutation.h"
 #include "caps/live_internal.h"
@@ -18,7 +21,7 @@ int lv_bpf(int cmd, void *attr, unsigned size)
 	while (r < 0 && errno == EAGAIN && cmd == BPF_PROG_LOAD);
 	if (r < 0)
 		return -errno;
-
+	/* cilium's NewFD: an fd of 0 is dup'ed to 1 or above (in the BPF UAPI some places read fd 0 as "none") */
 	if (r == 0 && (cmd == BPF_MAP_CREATE || cmd == BPF_PROG_LOAD || cmd == BPF_BTF_LOAD || cmd == BPF_BTF_GET_FD_BY_ID)) {
 		int d = fcntl(0, F_DUPFD_CLOEXEC, 1);
 		int e = errno;
@@ -175,7 +178,7 @@ static int btf_handle(struct bml_live *l, const uint8_t *btf, size_t len, struct
 		put32(attr, 20, ns);
 		put32(attr, 24, 1);
 	}
-
+	/* the haveBTF re-check: on failure its error is the result (the errno is dropped) */
 	int hb = lv_feat(l, LVF_BTF);
 	if (hb == LV_NOTSUP) {
 		free(log);
@@ -200,8 +203,8 @@ int lv_btf_handle(struct bml_live *l,const uint8_t *btf,size_t len,struct lv_res
 int lv_btf_handle_reason(struct bml_live *l,const uint8_t *btf,size_t len,struct lv_res *r)
 { return btf_handle(l,btf,len,r,1); }
 
-
-
+/* The module scan of attach-target resolution, for types that are not in vmlinux only. The C code does not port the reading of a
+ * module's split BTF: finding a module is an error (cilium looks the type up there). EPERM is ErrNotSupported, and so is the end of the scan. */
 static int walk_modules(struct lv_res *r)
 {
 	uint32_t id = 0;
@@ -244,16 +247,16 @@ static int walk_modules(struct lv_res *r)
 			return -1;
 		}
 		if (get32(info, 28) != 0 && strcmp(name, "vmlinux") != 0) {
-			r->err = 0;
+			r->err = 0; /* a module's BTF: the C code does not read split BTF (it fails closed) */
 			return -1;
 		}
 	}
 }
 
-
-
-
-
+/* The sentence for a failed resolution (kload and findProgramTargetInKernel in cilium v0.22 prog.go). When cilium's pair is not in vmlinux and the module scan finds nothing (EPERM included) it is `attach <PT>/<AT>: <featureName> not supported`: featureName is
+ * decided by the pair, and name is the AttachTo with the prefix removed from the resolved name. kload's raw load (lsm_cgroup and
+ * fsession, loadRaw in lsmcgroup.go) looks only in vmlinux and says `attach target <name>: not found`. An unknown pair gives NULL
+ * (cilium ignores errUnrecognizedAttachType and loads; the C code keeps that form). */
 static int raw_load_pair(const struct lv_prog *p)
 {
 	return (p->type == BPF_PROG_TYPE_LSM && p->attach_type == BPF_LSM_CGROUP) ||
@@ -293,21 +296,21 @@ static int resolve(struct bml_live *l, const struct lv_prog *p, uint32_t *btf_id
 {
 	const struct bml_kbtf *kb;
 	int rc = lv_vmlinux(l, &kb);
-	if (rc == -1 || rc == -2) {
+	if (rc == -1 || rc == -2) { /* a failure of cilium's cache.Kernel() becomes an UnsupportedFeatureError */
 		r->notsup = 1;
 		r->text = BML_MUT("live.attach_target_errno") || raw_load_pair(p) ? NULL : target_text(p);
 		return -1;
 	}
-	if (rc != 0)
+	if (rc != 0) /* -3: an error of the C type validation only; in cilium it is an error raised when the type is looked up (not ErrNotSupported) */
 		return -1;
 	char *err = NULL;
 	rc = bml_kbtf_by_name(kb, p->attach_to, p->attach_kind, btf_id, &err);
 	free(err);
 	if (rc == 0)
 		return 0;
-	if (rc == 2)
+	if (rc == 2) /* ErrMultipleMatches (and the C code's out of memory): an ambiguity error */
 		return -1;
-	if (raw_load_pair(p) && !BML_MUT("live.attach_target_errno")) {
+	if (raw_load_pair(p) && !BML_MUT("live.attach_target_errno")) { /* kload's raw load does not look in modules */
 		r->text = target_text(p);
 		return -1;
 	}
@@ -317,7 +320,7 @@ static int resolve(struct bml_live *l, const struct lv_prog *p, uint32_t *btf_id
 	return rc;
 }
 
-
+/* apply fixupProbeReadKernel to the copy of the instructions */
 static uint8_t *fix_insns(struct bml_live *l, const struct lv_prog *p)
 {
 	uint8_t *ins = malloc(p->n_insns * 8 + 1);
@@ -358,13 +361,13 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 	memset(attr, 0, sizeof attr);
 	uint32_t kver = 0;
 	if (p->type == BPF_PROG_TYPE_KPROBE && lv_kernel_version(l, &kver) != 0)
-		return -1;
+		return -1; /* detecting kernel version: an error with neither an errno nor NotSupported */
 	char name[16];
 	lv_obj_name(l, p->name ? p->name : "", name);
 	int ext = lv_feat(l, LVF_EXT_INFOS) == LV_OK;
 	if (ext) {
-		put32(attr, 76, 8);
-		put32(attr, 92, 16);
+		put32(attr, 76, 8);  /* func_info_rec_size */
+		put32(attr, 92, 16); /* line_info_rec_size */
 		if (p->func_info_cnt) {
 			put64(attr, 80, (uint64_t)(uintptr_t)p->func_info);
 			put32(attr, 88, p->func_info_cnt);
@@ -380,7 +383,7 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 			struct lv_res br;
 			btf_fd = lv_btf_handle(l, b ? b : p->btf, p->btf_len, &br);
 			free(b);
-			if (btf_fd < 0) {
+			if (btf_fd < 0) { /* load BTF: ... (not a VerifierError) */
 				r->err = br.err;
 				r->notsup = br.notsup;
 				return -1;
@@ -395,7 +398,7 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 	}
 	uint32_t btf_id = p->attach_btf_id, obj_fd = p->attach_prog_fd;
 	if (p->attach_to && resolve(l, p, &btf_id, r) != 0)
-		goto out;
+		goto out; /* attach <type>/<attach>: ... (not a VerifierError) */
 	put32(attr, 0, p->type);
 	put32(attr, 4, (uint32_t)p->n_insns);
 	put64(attr, 8, (uint64_t)(uintptr_t)ins);
@@ -430,7 +433,7 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 		}
 		if (p->log_mode == LV_LOG_DISABLED)
 			break;
-
+		/* retryLogAttrs */
 		if (log_size == MAX_LOG)
 			break;
 		if (ret == -ENOSPC) {
@@ -447,12 +450,12 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 		} else
 			break;
 		if (attempts >= 30) {
-			r->err = -ret;
+			r->err = -ret; /* bug: hit 30 verifier attempts (not a VerifierError) */
 			r->suffix = " (bug: hit 30 verifier attempts)";
 			goto out;
 		}
 	}
-
+	/* classification */
 	r->err = -ret;
 	size_t end = 0;
 	if (log) {
@@ -463,17 +466,17 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 	size_t tn = log ? (end > 256 ? 256 : end) : 0;
 	if (r->err == EPERM && log && log_size > 0 && log[0] == 0) {
 		r->suffix = " (MEMLOCK may be too low, consider rlimit.RemoveMemlock)";
-		goto out;
+		goto out; /* MEMLOCK may be too low: not a VerifierError */
 	}
 	if (r->err == EFAULT) {
 		r->suffix = " (hit verifier bug, increase LogSizeStart to fit the log and check dmesg)";
 		goto out;
 	}
 	if (r->err == EINVAL && contains(tail, tn, "invalid func unknown#195896080\n")) {
-		r->err = 0;
+		r->err = 0; /* replace the cause with errBadRelocation */
 		r->cause = 1;
 	} else if (r->err == EINVAL && contains(tail, tn, "invalid func unknown#233685214\n")) {
-		r->err = 0;
+		r->err = 0; /* replace the cause with errUnknownKfunc */
 		r->cause = 2;
 	} else if (r->err == EACCES && contains(tail, tn, "(18) r10 = 0xbad2310\n")) {
 		r->err = 0;
@@ -483,7 +486,7 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r)
 		int b = lv_feat(l, LVF_BPF2BPF);
 		if (b != LV_OK) {
 			r->notsup = b == LV_NOTSUP;
-			r->err = 0;
+			r->err = 0; /* load program: <the error of haveBPFToBPFCalls>: not a VerifierError */
 			goto out;
 		}
 	}

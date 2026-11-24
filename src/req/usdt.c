@@ -1,3 +1,5 @@
+/* req/usdt.c — reading the USDT note and the argument descriptions (a port of ReadUSDTPoints, parseUSDTDesc and ParseUSDTArg in bpf-mlir's
+ * go/requirements/usdt.go). Only the x86_64 general-purpose registers are read (not rip, eip, ah and the like, and not xmm). */
 #include "req/usdt.h"
 
 #include <stdarg.h>
@@ -37,7 +39,7 @@ void bml_usdt_points_free(struct bml_usdt_points *v)
 	memset(v, 0, sizeof(*v));
 }
 
-
+/* parseUSDTDesc: returns 0 on success, 1 for an error (*err) and -1 when memory runs out. */
 static int parse_desc(const struct bml_elf *elf, const uint8_t *d, size_t len, size_t addr, struct bml_usdt_point *pt, char **err)
 {
 	memset(pt, 0, sizeof(*pt));
@@ -111,7 +113,7 @@ int bml_usdt_read_points(const struct bml_elf *elf, struct bml_usdt_points *out,
 				return -1;
 			}
 			size_t nl = (size_t)namesz;
-			while (nl > 0 && data[p + nl - 1] == 0)
+			while (nl > 0 && data[p + nl - 1] == 0) /* strings.TrimRight(name, "\x00") */
 				nl--;
 			int stapsdt = nl == 7 && !memcmp(data + p, "stapsdt", 7) && typ == NT_STAPSDT;
 			const uint8_t *desc = data + desc_off;
@@ -142,7 +144,7 @@ int bml_usdt_read_points(const struct bml_elf *elf, struct bml_usdt_points *out,
 	return 0;
 }
 
-
+/* ---- argument descriptions ---- */
 
 static const char *const x86_regs[16][4] = {
 	{"rax", "eax", "ax", "al"},     {"rbx", "ebx", "bx", "bl"},     {"rcx", "ecx", "cx", "cl"},     {"rdx", "edx", "dx", "dl"},
@@ -174,7 +176,7 @@ static int lower(int c)
 	return c | ('x' - 'X');
 }
 
-
+/* strconv's underscoreOK */
 static int underscore_ok(const char *s, size_t n)
 {
 	char saw = '^';
@@ -205,8 +207,8 @@ static int underscore_ok(const char *s, size_t n)
 	return saw != '_';
 }
 
-
-
+/* strconv.ParseInt(s, 0, 64): returns 0 on success, -1 for a spelling error (*out is 0) and -2 for out of range (*out is MaxInt64 / MinInt64,
+ * the values Go returns). An overflow of ParseUint is out of range without looking at the rest of the spelling, as in Go. */
 static int parse_int0(const char *s0, size_t n0, int64_t *out)
 {
 	const char *s = s0;
@@ -265,7 +267,7 @@ static int parse_int0(const char *s0, size_t n0, int64_t *out)
 	return 0;
 }
 
-
+/* Go's fmt.Errorf("argument %q …", s, …): head and tail surround the %q of s */
 static char *arg_err(const char *s, size_t n, const char *tail)
 {
 	struct bml_buf b = {0};
@@ -320,7 +322,7 @@ int bml_usdt_parse_arg(const char *s, size_t n, struct bml_usdt_arg *spec, int *
 	}
 	if (sz < 0) {
 		spec->is_signed = 1;
-		if (sz != INT64_MIN)
+		if (sz != INT64_MIN) /* Go's int negation -n (MinInt64 stays MinInt64, and is rejected below by the sizes 1, 2, 4 and 8) */
 			sz = -sz;
 	}
 	if (sz != 1 && sz != 2 && sz != 4 && sz != 8) {
@@ -339,14 +341,14 @@ int bml_usdt_parse_arg(const char *s, size_t n, struct bml_usdt_arg *spec, int *
 	}
 	if (ln > 0 && loc[0] == '$') {
 		spec->kind = "const";
-		if (parse_int0(loc + 1, ln - 1, &spec->off)) {
+		if (parse_int0(loc + 1, ln - 1, &spec->off)) { /* Off is the value Go's ParseInt returns (MaxInt64 / MinInt64 when out of range) */
 			*err = arg_err(s, n, " has a constant this check cannot read");
 			return *err ? 0 : -1;
 		}
 		return 0;
 	}
 	if (ln > 0 && loc[ln - 1] == ')' && find(loc, ln, "(%", 2)) {
-		const char *p = find(loc, ln - 1, "(%", 2);
+		const char *p = find(loc, ln - 1, "(%", 2); /* strings.Cut(loc[:len-1], "(%"): the first (% */
 		size_t offn = p ? (size_t)(p - loc) : ln - 1;
 		const char *inner = p ? p + 2 : loc + ln - 1;
 		size_t inn = p ? (size_t)(loc + ln - 1 - inner) : 0;
@@ -365,7 +367,8 @@ int bml_usdt_parse_arg(const char *s, size_t n, struct bml_usdt_arg *spec, int *
 	return *err ? 0 : -1;
 }
 
-
+/* The multi-byte characters of unicode.IsSpace (their UTF-8 spellings). A leading byte is never a continuation byte, so scanning byte by byte
+ * gives the same result as Go's scan by rune. */
 static size_t space_at(const unsigned char *s, size_t n)
 {
 	unsigned c = s[0];

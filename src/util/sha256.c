@@ -1,3 +1,5 @@
+/* sha256.c — SHA-256 (FIPS 180-4), used to check a uprobe target binary against the recorded hash.
+ * The tests are the FIPS example vectors plus a differential test against Go's crypto/sha256. */
 #include <stdint.h>
 #include <string.h>
 

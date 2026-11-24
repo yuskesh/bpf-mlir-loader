@@ -1,3 +1,8 @@
+/* shim/build/elf.c — bindrt.Parse(elf).Requirements().SchemaSHA256 (the read is elf_internal.h's) and layout.MapSymbols
+ * as build-time exports.
+ *
+ * MapSymbols wraps debug/elf's errors as "cannot read ELF: <err>" (never reproduced — elf-header) and the symbol table's as
+ * "cannot read ELF symbols: <err>" (reproduced for "no symbol section", Go's ErrNoSymbols; else elf-symbols). */
 #include "shim/build/elf_internal.h"
 
 #include <stdlib.h>

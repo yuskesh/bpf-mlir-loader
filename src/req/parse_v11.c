@@ -1,10 +1,14 @@
+/* req/parse_v11.c — reading the companion rows tpfield, extret, extarg and structop of format version 11 (a port of parseV11Companion in
+ * bpf-mlir's go/requirements/companion_v11.go). Row order: trace_tp is followed by tpfield rows (offset strictly ascending); freplace by one
+ * extret and then extarg rows (index consecutive from 0); trace_struct_ops by one structop, then retsig, then farg (retsig and farg are
+ * handled in parse.c). */
 #include "req/parse_internal.h"
 #include "util/mutation.h"
 
 #include <stdio.h>
 #include <string.h>
 
-
+/* Returns 0 when the row was read, -1 for an error (stored in e) and -2 when memory runs out. */
 int req_v11_companion(struct bml_requirements *r, struct field *f, struct field line, int n, struct bml_parse_error *e)
 {
 	const char *want = req_eq(f[0], "tpfield") ? "trace_tp" : req_eq(f[0], "structop") ? "trace_struct_ops" : "freplace";
@@ -13,8 +17,9 @@ int req_v11_companion(struct bml_requirements *r, struct field *f, struct field 
 	if (!a || !req_str_eq(&a->program, f[1]) || !req_str_eq_lit(&a->attach_type, want))
 		return req_perr(e, n, row, "order", "%s line %d: %s row out of order %q", SEC, (int64_t)n, row, Q(line));
 	if (req_eq(f[0], "tpfield")) {
-
-		int array = f[5].n > 0 && f[5].p[0] == '[' && req_kfield_type_ok(f[5]);
+		/* Byte arrays [N]u8 / [N]i8 exist from format version 17 on; this is checked after the version-16 check for strptr and strarray and before the
+		 * value check. */
+		int array = f[5].n > 0 && f[5].p[0] == '[' && req_kfield_type_ok(f[5]); /* validKFieldByteArray: the spelling is at most 6 bytes long */
 		if (array && r->version < 17 && !BML_MUT("parse.v17_rows_any_version")) {
 			char t[8] = {0};
 			memcpy(t, f[5].p, f[5].n);
@@ -27,7 +32,7 @@ int req_v11_companion(struct bml_requirements *r, struct field *f, struct field 
 		int64_t off, b;
 		int e1 = bml_go_atoi(f[3].p, f[3].n, &off), e2 = bml_go_atoi(f[4].p, f[4].n, &b);
 		int valid = (b == 1 || b == 2 || b == 4 || b == 8) && (req_eq(f[5], "i") || req_eq(f[5], "u") || (str && b == 8));
-		if (array) {
+		if (array) { /* f[5] is fmt.Sprintf("[%d]u8", b) or "[%d]i8" */
 			char u[32], s[32];
 			snprintf(u, sizeof u, "[%lld]u8", (long long)b), snprintf(s, sizeof s, "[%lld]i8", (long long)b);
 			valid = req_eq(f[5], u) || req_eq(f[5], s);
@@ -72,7 +77,7 @@ int req_v11_companion(struct bml_requirements *r, struct field *f, struct field 
 		a->n_ext_args++;
 		return 0;
 	}
-
+	/* structop */
 	if (a->sop_struct.len != 0)
 		return req_perr(e, n, row, "order", "%s line %d: %s row out of order %q", SEC, (int64_t)n, row, Q(line));
 	if (!req_valid_cname(f[2]) || !req_valid_cname(f[3]))

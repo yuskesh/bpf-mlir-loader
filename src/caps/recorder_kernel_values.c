@@ -1,3 +1,4 @@
+/* Recording of the newer value queries. A known absence round-trips through the diffs with the sentinel removed. */
 #include "caps/recorder_internal.h"
 
 #include <stdio.h>

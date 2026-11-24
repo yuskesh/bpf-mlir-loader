@@ -1,3 +1,13 @@
+/* abi/tcx.c — the tcx (sched_cls) attach, the direction of a link, and the test run of a tc (skb)
+ * program. These follow the downstream C ABI entries attach_tcx, link_tcx_direction and
+ * test_run_tc_data; the Go version of the logic is the loader's tcx.go.
+ * - The direction is the expected attach type that libbpf decided from the ELF section
+ *   (tcx/ingress or tcx/egress). After the attach, the real direction and ifindex in the link's
+ *   info are compared with it: if they differ, the link is detached and BML_OTHER is returned, so an
+ *   attach that the kernel actually made differently is never silently accepted.
+ * - The library does not judge the length of the data of a tc test run, because it must not hard-code
+ *   limits that differ between kernel versions. It only appends a hint with the measured conditions
+ *   to the kernel's EINVAL. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -22,7 +32,7 @@ static const char *direction(uint32_t at)
 	return at == BPF_TCX_INGRESS ? "ingress" : at == BPF_TCX_EGRESS ? "egress" : "";
 }
 
-
+/* The tcx info of a link fd: 1 if the link is not a tcx link, -errno if it cannot be read, 0 if read. */
 static int tcx_info(int fd, uint32_t *at, uint32_t *ifindex)
 {
 	struct bpf_link_info info;
@@ -69,10 +79,10 @@ static int64_t attach_tcx_body(int64_t obj, const char *prog, int64_t len, const
 		return e;
 	}
 	free(ifn);
-
+	/* Compare the real direction and interface after the attach (from the link info) with the ELF's direction. */
 	uint32_t at = 0, got_if = 0;
 	int rc = tcx_info(bpf_link__fd(l), &at, &got_if);
-	if (rc == 0 && BML_MUT("tcx.info_other_direction"))
+	if (rc == 0 && BML_MUT("tcx.info_other_direction")) /* a mutation that tries the form where the kernel attached in the opposite direction */
 		at = at == BPF_TCX_INGRESS ? BPF_TCX_EGRESS : BPF_TCX_INGRESS;
 	if (rc < 0) {
 		bpf_link__destroy(l);
@@ -134,7 +144,7 @@ static int64_t test_run_tc_data_body(int64_t obj, const char *prog, int64_t len,
 	return abi_ok((int64_t)(int32_t)t.retval);
 }
 
-
+/* ---- public entries (each counts as a running call of the object) ---- */
 int64_t bml_attach_tcx(int64_t obj, const char *prog, int64_t prog_len, const char *ifname, int64_t if_len)
 {
 	int64_t e;

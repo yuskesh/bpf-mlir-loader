@@ -1,3 +1,6 @@
+/* dwarf/entry.c — a copy of Go's debug/dwarf buf (which yields zeros after an error), the decoding of entry forms, and
+ * the Reader (Next, SkipChildren, Seek, and the collection of DWARF 5 bases). Error messages have the same form as
+ * Go's DecodeError ("decoding dwarf section <name> at offset 0x<hex>: <message>"). */
 #include "dwarf/internal.h"
 
 #include <stdio.h>
@@ -62,7 +65,7 @@ uint64_t dw_u64(struct dw_buf *b)
 	return fixed(b, 8);
 }
 
-
+/* Go's varint: when the data runs out it gives 0 (not an error, and it does not advance). A shift beyond 64 bits gives 0, as in Go. */
 static uint64_t varint(struct dw_buf *b, unsigned *bits)
 {
 	uint64_t c = 0;
@@ -83,8 +86,8 @@ static uint64_t varint(struct dw_buf *b, unsigned *bits)
 	return 0;
 }
 
-
-
+/* Go's buf.uint / buf.int: a varint that ran out (bits 0) is "underflow". Fuzzing the DWARF reader found this: the
+ * error used to be missing, and the reader kept returning null entries at an abbreviation code that never ended. */
 uint64_t dw_uleb(struct dw_buf *b)
 {
 	unsigned bits;
@@ -105,7 +108,7 @@ int64_t dw_sleb(struct dw_buf *b)
 	return (int64_t)ux;
 }
 
-
+/* Go's buf.string */
 static const char *cstring(struct dw_buf *b)
 {
 	const uint8_t *z = b->n ? memchr(b->p, 0, b->n) : NULL;
@@ -127,7 +130,7 @@ static uint64_t addr(struct dw_buf *b)
 	return 0;
 }
 
-
+/* The string at off in another section (Go: makeBuf(..., 0, data); skip(off); string()); an error is moved to b */
 static const char *str_at(struct dw_buf *b, const char *name, struct dw_sect s, uint64_t off)
 {
 	struct dw_buf b1;
@@ -180,7 +183,7 @@ static void one_val(struct dw_buf *b, const struct dw_unit *u, const struct dw_f
 {
 	uint64_t fm = f->form;
 	*v = (struct dw_val){.attr = f->attr};
-	if (fm == 0x16) {
+	if (fm == 0x16) { /* indirect */
 		fm = dw_uleb(b);
 		if (!known_form(fm)) {
 			dw_buf_error(b, "cannot determine class of unknown attribute form");
@@ -191,7 +194,7 @@ static void one_val(struct dw_buf *b, const struct dw_unit *u, const struct dw_f
 	uint64_t o;
 	switch (fm) {
 	case 0x01: v->kind = DV_UINT, v->u = addr(b); break;
-	case 0x1b: case 0x29: case 0x2a: case 0x2b: case 0x2c:
+	case 0x1b: case 0x29: case 0x2a: case 0x2b: case 0x2c: /* addrx */
 		o = fm == 0x1b ? dw_uleb(b) : fixed(b, fm == 0x29 ? 1 : fm == 0x2a ? 2 : fm == 0x2b ? 3 : 4);
 		if (!b->d->addr.p)
 			dw_buf_error(b, "DW_FORM_addrx with no .debug_addr section");
@@ -223,7 +226,7 @@ static void one_val(struct dw_buf *b, const struct dw_unit *u, const struct dw_f
 	case 0x21: v->kind = DV_INT, v->i = f->form == 0x21 ? f->val : 0; break;
 	case 0x0c: v->kind = DV_BOOL, v->i = dw_u8(b) == 1; break;
 	case 0x19: v->kind = DV_BOOL, v->i = 1; break;
-	case 0x10:
+	case 0x10: /* ref_addr */
 		if (u->vers == 2)
 			v->kind = DV_OFF, v->u = addr(b);
 		else
@@ -235,7 +238,7 @@ static void one_val(struct dw_buf *b, const struct dw_unit *u, const struct dw_f
 	case 0x14: v->kind = DV_OFF, v->u = dw_u64(b) + u->base; break;
 	case 0x15: v->kind = DV_OFF, v->u = dw_uleb(b) + u->base; break;
 	case 0x08: v->kind = DV_STR, v->s = cstring(b); break;
-	case 0x0e: case 0x1f:
+	case 0x0e: case 0x1f: /* strp, line_strp */
 		o = off_sized(b, "DW_FORM_strp/line_strp");
 		if (b->err)
 			return;
@@ -245,7 +248,7 @@ static void one_val(struct dw_buf *b, const struct dw_unit *u, const struct dw_f
 		}
 		v->kind = DV_STR, v->s = str_at(b, fm == 0x0e ? "str" : "line_str", fm == 0x0e ? b->d->str : b->d->line_str, o);
 		break;
-	case 0x1a: case 0x25: case 0x26: case 0x27: case 0x28: {
+	case 0x1a: case 0x25: case 0x26: case 0x27: case 0x28: { /* strx */
 		o = fm == 0x1a ? dw_uleb(b) : fixed(b, fm - 0x24);
 		if (!b->d->str_offsets.n)
 			dw_buf_error(b, "DW_FORM_strx with no .debug_str_offsets section");
@@ -269,7 +272,7 @@ static void one_val(struct dw_buf *b, const struct dw_unit *u, const struct dw_f
 	case 0x20: case 0x24: v->kind = DV_UINT, v->u = dw_u64(b); break;
 	case 0x1c: v->kind = DV_UINT, v->u = dw_u32(b); break;
 	case 0x22: v->kind = DV_UINT, v->u = dw_uleb(b); break;
-	case 0x23: {
+	case 0x23: { /* rnglistx */
 		o = dw_uleb(b) * (is64 ? 8 : 4) + u->rng_base;
 		struct dw_buf b1;
 		dw_buf_init(&b1, b->d, u, "rnglists", 0, b->d->rnglists.p, b->d->rnglists.n);
@@ -300,7 +303,7 @@ int dw_entry_decode(struct dw_buf *b, const struct dw_unit *u, struct dw_entry *
 	memset(e, 0, sizeof *e);
 	uint64_t off = b->off, id = dw_uleb(b);
 	if (id == 0)
-		return b->err ? -1 : 0;
+		return b->err ? -1 : 0; /* Go's &Entry{}, whose Offset is also 0 */
 	const struct dw_abbrev *a = NULL;
 	for (size_t i = u->at ? u->at->n : 0; i-- > 0;)
 		if (u->at->a[i].id == id) {
@@ -329,7 +332,7 @@ int dw_entry_decode(struct dw_buf *b, const struct dw_unit *u, struct dw_entry *
 	return 0;
 }
 
-
+/* ---- Reader ---- */
 
 static void set_err(struct dw_reader *r, char *e)
 {
@@ -339,7 +342,7 @@ static void set_err(struct dw_reader *r, char *e)
 		free(e);
 }
 
-
+/* Go's collectDwarf5BaseOffsets: read the unit's first entry with base 0 and remember the base attributes */
 static void collect_bases(struct dw_reader *r, struct dw_unit *u)
 {
 	if (u->vers < 5 || u->have5)
@@ -353,11 +356,11 @@ static void collect_bases(struct dw_reader *r, struct dw_unit *u)
 		return;
 	}
 	const struct dw_val *v;
-	if ((v = dw_val(&e, 0x73)) && v->kind == DV_INT)
+	if ((v = dw_val(&e, 0x73)) && v->kind == DV_INT) /* DW_AT_addr_base */
 		u->addr_base = (uint64_t)v->i;
-	if ((v = dw_val(&e, 0x72)) && v->kind == DV_INT)
+	if ((v = dw_val(&e, 0x72)) && v->kind == DV_INT) /* DW_AT_str_offsets_base */
 		u->str_base = (uint64_t)v->i;
-	if ((v = dw_val(&e, 0x74)) && v->kind == DV_INT)
+	if ((v = dw_val(&e, 0x74)) && v->kind == DV_INT) /* DW_AT_rnglists_base */
 		u->rng_base = (uint64_t)v->i;
 	dw_entry_free(&e);
 }
@@ -430,10 +433,10 @@ int dw_next(struct dw_reader *r, struct dw_entry *e)
 	r->last_children = e->children;
 	r->last_sibling = 0;
 	if (e->children) {
-		const struct dw_val *s = dw_val(e, 0x01);
+		const struct dw_val *s = dw_val(e, 0x01); /* DW_AT_sibling */
 		r->last_sibling = s && s->kind == DV_OFF ? s->u : 0;
 	}
-	if (e->tag == 0x11 || e->tag == 0x3c)
+	if (e->tag == 0x11 || e->tag == 0x3c) /* compile_unit, partial_unit */
 		r->last_unit = 1;
 	return 1;
 }

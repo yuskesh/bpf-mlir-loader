@@ -1,3 +1,4 @@
+/* Messages of the newer Unmet kinds. The caller of the check keeps the denominators and the order of diagnostics. */
 #include "req/check_internal.h"
 
 #include <string.h>

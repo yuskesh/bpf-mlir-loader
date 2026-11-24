@@ -1,3 +1,8 @@
+/* caps/live_sockmap.c — the sockmap link probe for the attach_types of sk_skb and sk_msg. It is a C port of sockmapLinkProbe in
+ * kernel/internal/kload/attachctx.go, and live_attach.c calls it. It loads `r0 = 0; exit` with the expected attach type and, if that is
+ * accepted, creates a small empty sockmap, attaches with BPF_LINK_CREATE (cilium's link.AttachRawLink, a raw link without fallback) and
+ * **closes it at once** (the map is empty, so it affects no socket). If the link can be created the answer is true; EINVAL (before
+ * 6.10 link_create has no SK_SKB / SK_MSG) is false; anything else is Unknown. PROG_ATTACH is not used. */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -10,7 +15,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-#define UNK ": cannot be determined on this target"
+#define UNK ": cannot be determined on this target" /* the ErrUnknown sentence (the %w of unknownf) */
 
 static const uint8_t ret_zero[16] = {0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 
@@ -28,10 +33,10 @@ int lv_sockmap_link_probe(struct bml_live *l, const char *pt_name, uint32_t pt, 
 	p.log_mode = LV_LOG_0;
 	if (lv_prog_load(l, &p, &r) != 0) {
 		lv_res_free(&r);
-		return -2;
+		return -2; /* a rejected load is left to the caller's paired load */
 	}
 	int pfd = r.fd;
-
+	/* cilium's NewMap (SockMap: key size 4, value size 4, one entry, name ebpf_probe) */
 	union bpf_attr a;
 	memset(&a, 0, sizeof a);
 	a.map_type = BPF_MAP_TYPE_SOCKMAP;
@@ -60,7 +65,7 @@ int lv_sockmap_link_probe(struct bml_live *l, const char *pt_name, uint32_t pt, 
 	if (lfd >= 0) {
 		lv_close(lfd);
 		*val = 1;
-	} else if (lfd != -EINVAL) {
+	} else if (lfd != -EINVAL) { /* EINVAL means sockmap has no BPF_LINK_CREATE (before 6.10): false */
 		char *es = bml_go_errno_str(-lfd);
 		if (asprintf(why, "%s with expected attach type %s loads, but the sockmap link probe failed (create link: %s)" UNK, pt_name, at_name, es ? es : "") < 0)
 			*why = NULL;

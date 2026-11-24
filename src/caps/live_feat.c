@@ -1,3 +1,11 @@
+/* caps/live_feat.c — a C port of the internal FeatureTests of cilium/ebpf v0.22 (haveBTF, haveMapBTF, haveProgBTF,
+ * haveFuncLinkage, haveDeclTags, haveTypeTags, haveEnum64, haveObjName, objNameAllowsDot, haveProgramExtInfos,
+ * haveBPFToBPFCalls and haveProbeReadKernel), of KernelMarshalOptions, StripFuncLinkage, linux.KernelVersion (which reads the
+ * Linux note in the vDSO) and maybeFillObjName.
+ *
+ * The cache works like FeatureTest.execute: only "present" (nil) and "absent" (ErrNotSupported) are remembered, for the life of
+ * the process; any other error is not remembered and the next call probes again.
+ * The BTF blobs are, byte for byte, the output of cilium's Builder.Marshal (dumped from Go). */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -8,7 +16,7 @@
 #include <string.h>
 #include <sys/auxv.h>
 
-
+/* a hex blob (whitespace is skipped), decoded into a static buffer */
 static size_t unhex(const char *h, uint8_t *out, size_t cap)
 {
 	size_t n = 0;
@@ -39,7 +47,7 @@ static const char *const btf_blob[] = {
 	[LVF_ENUM64] = "9feb01001800000000000000180000001800000006000000000000000100001308000000010000000000000001000000005445535400",
 };
 
-
+/* probeBTF: a single attempt, no log. Returns 0 on success and -errno on failure. */
 static int probe_btf(int which)
 {
 	uint8_t blob[128];
@@ -71,7 +79,7 @@ static int map_create(const char *name)
 	return fd;
 }
 
-
+/* cilium's progLoad: it does not go through NewProgramWithOptions, so there is no log, kern_version is 0 and there is no name */
 static int prog_load_raw(uint32_t type, const char *hex, const char *license, uint32_t func_info_cnt, uint32_t btf_fd)
 {
 	uint8_t ins[64];
@@ -164,7 +172,7 @@ uint8_t *lv_strip_func_linkage(const uint8_t *btf, size_t len)
 		return NULL;
 	}
 	memcpy(copy, btf, len);
-	if (bml_kbtf_from_raw(copy, len, &kb, &err) != 0) {
+	if (bml_kbtf_from_raw(copy, len, &kb, &err) != 0) { /* our own blob: if it cannot be read, that is a bug in the C code */
 		free(err);
 		free(b);
 		return NULL;
@@ -175,14 +183,14 @@ uint8_t *lv_strip_func_linkage(const uint8_t *btf, size_t len)
 		if (t.kind == KBTF_FUNC) {
 			size_t info = (size_t)(kb.types - kb.raw) + kb.off[id] + 4;
 			b[info] = 0;
-			b[info + 1] = 0;
+			b[info + 1] = 0; /* the low 16 bits of vlen (the linkage) */
 		}
 	}
 	bml_kbtf_free(&kb);
 	return b;
 }
 
-
+/* The "Linux" note (type 0, 4-byte desc) in an SHT_NOTE section of the vDSO (the ELF image at AT_SYSINFO_EHDR) */
 static int vdso_version(uint32_t *v)
 {
 	const uint8_t *base = (const uint8_t *)getauxval(AT_SYSINFO_EHDR);
@@ -191,7 +199,7 @@ static int vdso_version(uint32_t *v)
 	const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
 	if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_ident[EI_CLASS] != ELFCLASS64 || eh->e_shentsize != sizeof(Elf64_Shdr))
 		return -1;
-
+	/* The vDSO image ends with the section header table (the kernel's vdso2c tool; the whole image is mapped). Use that end as the bound. */
 	size_t size = eh->e_shoff + (size_t)eh->e_shnum * sizeof(Elf64_Shdr);
 	if (eh->e_shoff == 0 || size > (1u << 20))
 		return -1;
@@ -237,7 +245,7 @@ int lv_kernel_version(struct bml_live *l, uint32_t *v)
 		l->kver_done = 1;
 		uint32_t code;
 		l->kver_ok = vdso_version(&code) == 0;
-
+		/* NewVersionFromCode, then Kernel(): each field is reduced to 8 bits and the sublevel is capped at 255, which gives back the same value */
 		if (l->kver_ok)
 			l->kver = (code >> 16 & 0xff) << 16 | (code >> 8 & 0xff) << 8 | (code & 0xff);
 	}

@@ -1,3 +1,6 @@
+/* abi/owned.c — before an object is closed, close the readers (ring buffer mappings) and the
+ * iterators it owns. The mappings must go before the object does, and a read on an already
+ * closed reader reports the STATE error kind. */
 #include "abi/map_internal.h"
 
 #include <stdlib.h>

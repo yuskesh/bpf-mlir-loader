@@ -1,3 +1,8 @@
+/* caps/debug_file.c — reading a separated DWARF file. This is a C port of UprobeDebugKey, BuildIDDebugPath and
+ * ReadUprobeDebugFile from go/requirements/uprobe_debug.go. It is shared by the live caps (default root plus a per-program
+ * override) and the recorded caps (which return the recorded file answer).
+ * The file is opened once. The byte snapshot is taken in this order: fstat, read up to the limit plus one byte, check that
+ * the length matches; the file is closed before the function returns. */
 #include "caps/caps.h"
 
 #include <errno.h>
@@ -74,7 +79,7 @@ int bml_caps_debug_read_file(const char *path, uint8_t **data, size_t *len, char
 		if (n == cap) {
 			size_t nc = cap * 2 > (size_t)BML_DEBUG_RAW_LIMIT + 1 ? (size_t)BML_DEBUG_RAW_LIMIT + 1 : cap * 2;
 			if (nc == cap)
-				break;
+				break; /* read up to the limit plus one byte */
 			uint8_t *nb = realloc(b, nc);
 			if (!nb)
 				free(b);

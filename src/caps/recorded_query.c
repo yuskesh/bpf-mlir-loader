@@ -1,3 +1,4 @@
+/* caps/recorded_query.c — the queries of recorded caps (the methods of Go's RecordedCaps; the spelling of the keys is in section 10 of the requirements format). It was split out of recorded.c. */
 #include "caps/recorded_internal.h"
 
 #include <errno.h>
@@ -11,7 +12,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* ---- queries (the methods of Go's RecordedCaps) ---- */
 
 static const struct query *find_q(const struct bml_recorded *r, const char *q)
 {
@@ -21,7 +22,7 @@ static const struct query *find_q(const struct bml_recorded *r, const char *q)
 	return NULL;
 }
 
-
+/* whether the caps that probe again have the query q (Go's reprobeHas: the QuerySet and whether a callback exists) */
 static int reprobe_has(const struct bml_caps *rp, const char *q)
 {
 	if (rp->has_query && !rp->has_query(rp->ctx, q))
@@ -46,12 +47,12 @@ static int reprobe_has(const struct bml_caps *rp, const char *q)
 	return 0;
 }
 
-
+/* If the privilege differs and caps that probe again exist: whether a query that depends on privilege is held by those caps */
 static int rec_has_query(void *ctx, const char *q)
 {
 	const struct bml_caps *rp;
 	char *m = NULL;
-	if (!strcmp(q, BML_QUERY_HELPER_TARGET)) {
+	if (!strcmp(q, BML_QUERY_HELPER_TARGET)) { /* it is also bound to the UID; on an error it falls through to the common decision below (Go's HasQuery) */
 		int ht = rc_helper_target_privilege(ctx, &rp, &m);
 		free(m);
 		m = NULL;
@@ -65,7 +66,7 @@ static int rec_has_query(void *ctx, const char *q)
 	return find_q(ctx, q) != NULL;
 }
 
-
+/* Queries that depend on privilege come first (the privileged step of each Go method): Unknown, or the callback of the caps that probe again (Unknown by noReprobe if there is none) */
 #define PRIV(Q, CB, ...)                                                                                                               \
 	do {                                                                                                                           \
 		const struct bml_caps *rp_;                                                                                            \
@@ -82,7 +83,7 @@ static const struct bml_loader_decl *rec_loader(void *ctx)
 	return &((struct bml_recorded *)ctx)->loader;
 }
 
-
+/* answer: a missing key is an error, unknown gives UNKNOWN, and error gives ERROR */
 static int answer(const struct bml_recorded *r, const char *q, const char *key, const struct answer **out, char **msg)
 {
 	const struct query *qq = find_q(r, q);
@@ -152,7 +153,7 @@ int rc_diffs(const struct bml_recorded *r, const char *q, const char *key, struc
 		*msg = bml_buf_take(&b);
 		return BML_Q_ERROR;
 	}
-
+	/* add to the caller's out (kfields joins several keys) */
 	for (size_t i = 0; i < a->diffs.n; i++) {
 		char **ns = realloc(out->s, (out->n + 1) * sizeof(char *));
 		if (!ns)
@@ -239,8 +240,8 @@ static int rec_nullable_args(void *ctx, int *out, char **msg)
 	return rc_boolean(ctx, BML_QUERY_NULLABLE_ARGS, "", out, msg);
 }
 
-
-
+/* ebpf-caps recording format 4: the keys are "<prog type>/<attach type>", "<attach type>/<kind>:<value>" and
+ * "<prog type>/<attach type>/<struct>.<field>/<r|w>/<number of bytes>" */
 static int rec_attach_type(void *ctx, const char *pt, int64_t ptid, const char *at, int *out, char **msg)
 {
 	PRIV(BML_QUERY_ATTACH_TYPE, attach_type, pt, ptid, at, out, msg);
@@ -281,7 +282,7 @@ static int rec_func(void *ctx, const char *name, struct bml_strs *out, char **ms
 	return rc_diffs(ctx, BML_QUERY_FUNC, name, out, msg);
 }
 
-
+/* queries for diffs with a key of the form name(a,b,...) (tracepoint, and func_args since bpf-mlir v0.17.0) */
 static int named_args(void *ctx, const char *q, const char *name, const struct bml_str *args, size_t n, struct bml_strs *out, char **msg)
 {
 	struct bml_buf b = {0};
@@ -310,7 +311,7 @@ static int rec_func_args(void *ctx, const char *name, const struct bml_str *args
 	return named_args(ctx, BML_QUERY_FUNC_ARGS, name, args, n, out, msg);
 }
 
-
+/* ebpf-caps recording format 5: TPFieldKey, StructOpsKey and ExtTargetKey (shared with recorder.c; see recorded.h) */
 char *bml_caps_tpfield_key(const char *event, const char *field, int64_t off, int64_t bytes, const char *sign)
 {
 	return rc_fmts("%s/%s/%lld/%lld/%s", event, field, (long long)off, (long long)bytes, sign);
@@ -329,7 +330,7 @@ char *bml_caps_proto_key(const char *a, char sep, const char *b_, int64_t nargs,
 	return bml_buf_take(&b);
 }
 
-
+/* ask diffs with the key that was built (the key is freed) */
 static int keyed_rc_diffs(void *ctx, const char *q, char *key, struct bml_strs *out, char **msg)
 {
 	if (!key)
@@ -381,7 +382,7 @@ static int rec_func_param(void *ctx, const char *name, int64_t n, const char *ty
 	return st;
 }
 
-
+/* ebpf-caps recording format 8: KfuncKey (name/ret(a,b)) and SysargKey (name/n/type), shared with recorder.c */
 char *bml_caps_kfunc_key(const char *name, const char *ret, const struct bml_str *args, size_t n)
 {
 	struct bml_buf b = {0};

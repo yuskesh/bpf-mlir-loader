@@ -1,3 +1,4 @@
+/* The arena map's static shape, read independently from the ELF and its BTF. No kernel operation is performed. */
 #ifndef BML_MAPS_ARENA_H
 #define BML_MAPS_ARENA_H
 #include <stddef.h>
@@ -10,7 +11,7 @@ struct bml_map_decl;
 struct bml_map_problems;
 int bml_arena_map_decls_parse(const char *,size_t,struct bml_map_decls *,char **);
 int bml_arena_map_decl_parse_one(const char *,size_t,struct bml_map_decl *,char **);
-
+/* After generic checks: require_all covers every req map row, including pre-29 ELF. */
 int bml_check_arena_decls(const struct bml_requirements *,const void *,size_t,
 	const struct bml_map_decls *,int require_all,struct bml_map_problems *);
 int bml_arena_shape(uint64_t pages, uint64_t flags, uint64_t address,

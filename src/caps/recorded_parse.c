@@ -1,3 +1,4 @@
+/* caps/recorded_parse.c — the order in which caps.json is read (look-ahead for ebpf-caps 1, then the strict read, then the checks of format, loader and queries) and reading from a file. It was split out of recorded.c. */
 #include "caps/recorded_internal.h"
 
 #include <errno.h>
@@ -15,21 +16,21 @@ static const char *const known_queries[] = {
 	BML_QUERY_FUNC,       BML_QUERY_TRACEPOINT,   BML_QUERY_KFIELDS,    BML_QUERY_BTF_FEATURE,  BML_QUERY_ARG_TAG,
 	BML_QUERY_ARCH,       BML_QUERY_STRUCT_FIELD, BML_QUERY_KERNEL_SYM, BML_QUERY_FUNC_PARAM,   BML_QUERY_UPROBE_BIN,
 	BML_QUERY_MAP_FIELD,  BML_QUERY_NULLABLE_ARGS, BML_QUERY_TRACING_HELPER, BML_QUERY_FUNC_ARGS,
-	BML_QUERY_ATTACH_TYPE, BML_QUERY_ATTACH_TARGET, BML_QUERY_CTX_ACCESS,
-	BML_QUERY_TP_FIELDS, BML_QUERY_STRUCT_OPS_MEMBERS, BML_QUERY_EXT_TARGETS,
-	BML_QUERY_KFUNC_PROTOS, BML_QUERY_SYSCALL_ARGS,
-	BML_QUERY_KFUNC_LOADS, BML_QUERY_TRACEPOINT_BUFFER,
-	BML_QUERY_UPROBE_DEBUG,
+	BML_QUERY_ATTACH_TYPE, BML_QUERY_ATTACH_TARGET, BML_QUERY_CTX_ACCESS, /* ebpf-caps recording format 4 */
+	BML_QUERY_TP_FIELDS, BML_QUERY_STRUCT_OPS_MEMBERS, BML_QUERY_EXT_TARGETS, /* ebpf-caps recording format 5 */
+	BML_QUERY_KFUNC_PROTOS, BML_QUERY_SYSCALL_ARGS, /* ebpf-caps recording format 8 */
+	BML_QUERY_KFUNC_LOADS, BML_QUERY_TRACEPOINT_BUFFER, /* ebpf-caps recording format 9 */
+	BML_QUERY_UPROBE_DEBUG, /* ebpf-caps recording format 10 */
 	BML_QUERY_ENUM_VALUES, BML_QUERY_FIB_FLAGS, BML_QUERY_KSYM_VARS, BML_QUERY_KCONFIG,
 	BML_QUERY_BTF_PRESENCE, BML_QUERY_FUNC_RET, BML_QUERY_STRUCT_SIZE,
 	BML_QUERY_NETKIT, BML_QUERY_HELPER_TARGET, BML_QUERY_SLEEPABLE,
 };
-
+/* The choices for Go's format error (eight of them) */
 #define FORMATS                                                                                                                        \
 	"\"" BML_RECORDED_FORMAT "\" (or \"ebpf-caps 19\" / \"ebpf-caps 18\" / \"ebpf-caps 17\" / \"ebpf-caps 16\" /\"ebpf-caps 15\" / \"ebpf-caps 14\" / \"ebpf-caps 13\" / \"ebpf-caps 12\" / \"ebpf-caps 11\" / \"ebpf-caps 10\" / \"" BML_RECORDED_FORMAT_V9 "\" / \"" BML_RECORDED_FORMAT_V8 "\" / \"" BML_RECORDED_FORMAT_V7 "\" / \"" BML_RECORDED_FORMAT_V6 "\" / \"" \
 	BML_RECORDED_FORMAT_V5 "\" / \"" BML_RECORDED_FORMAT_V4 "\" / \"" BML_RECORDED_FORMAT_V3 "\" / \"" BML_RECORDED_FORMAT_V2 "\")"
 
-
+/* Go's sort.Strings (byte order), for query names and keys */
 static int cmp_query(const void *a, const void *b)
 {
 	return strcmp(((const struct query *)a)->name, ((const struct query *)b)->name);
@@ -40,7 +41,7 @@ static int cmp_entry(const void *a, const void *b)
 	return strcmp(((const struct entry *)a)->key, ((const struct entry *)b)->key);
 }
 
-
+/* Add the queries of queries or privileged_queries (where) to r->q (priv says which of the two they came from). null or missing does nothing. Returns -1 with *err on failure. */
 static int decode_queries(const struct bml_json *qs, const char *where, struct bml_recorded *r, int priv, char **err)
 {
 	if (!qs || qs->type == BML_JSON_NULL)
@@ -66,7 +67,7 @@ static int decode_queries(const struct bml_json *qs, const char *where, struct b
 			return -1;
 		}
 		if (m->type == BML_JSON_NULL)
-			continue;
+			continue; /* the query exists and its answer is empty (Go's nil map; HasQuery is true) */
 		if (m->type != BML_JSON_OBJECT) {
 			*err = rc_fmts("caps: json: cannot unmarshal into %s[%s]", where, q->name);
 			return -1;
@@ -98,8 +99,9 @@ static int decode_queries(const struct bml_json *qs, const char *where, struct b
 static const char *const ebpf_caps1_msg =
 	"caps: format \"ebpf-caps 1\" is no longer read (the loader's BTF rewrites moved from the query btf_rewrites to the loader declaration's btf_rewrite); record the caps again as \"" BML_RECORDED_FORMAT "\"";
 
-
-
+/* The lenient look-ahead: Go's json.Unmarshal(data, &struct{Format string}). The top-level key that equals "format" ignoring case is used
+ * (the last one wins; null gives ""). Returns 1 with *fmt / *flen if it could be read (Unmarshal did not fail; a missing format or null
+ * gives "" and 0), and 0 if it could not be read or has the wrong type. */
 static int peek_format(const char *data, size_t len, char **fmt, size_t *flen)
 {
 	struct bml_json *j;
@@ -138,7 +140,7 @@ static int peek_format(const char *data, size_t len, char **fmt, size_t *flen)
 	return !bad;
 }
 
-
+/* the look-ahead: whether the format is the string "ebpf-caps 1" */
 static int old_format(const char *data, size_t len)
 {
 	char *f;
@@ -148,7 +150,7 @@ static int old_format(const char *data, size_t len)
 	return r;
 }
 
-
+/* knownRecordedFormat (the formats 8, 7, 6, 5, 4, 3, 2 and 1) */
 static int known_format(const char *f, size_t n)
 {
 	static const char *const known[] = {BML_RECORDED_FORMAT, BML_RECORDED_FORMAT_V19, BML_RECORDED_FORMAT_V18, BML_RECORDED_FORMAT_V17, BML_RECORDED_FORMAT_V16, BML_RECORDED_FORMAT_V15, BML_RECORDED_FORMAT_V14,
@@ -174,12 +176,12 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 	*err = NULL;
 	if (rule)
 		*rule = BML_JR_NONE;
-
+	/* read the format first, leniently, so that ebpf-caps 1 is named before any other error */
 	if (old_format(data, len)) {
 		*err = strdup(ebpf_caps1_msg);
 		return NULL;
 	}
-
+	/* scanStrictJSON (byte-level rules), then the lenient look-ahead for an unknown format (caps_format_unknown), then the type check (unknown_key, type) */
 	struct bml_json *j;
 	char *pe = NULL;
 	if (bml_json_parse_ex(data, len, &rc_d_caps, 0, &j, &pe, rule)) {
@@ -275,30 +277,30 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 	}
 	if (decode_queries(bml_json_get(j, "queries"), "queries", r, 0, err))
 		goto fail;
-
+	/* ebpf-caps recording format 6: privileged_queries go into the same table too, marked with where they came from (compared in Go's order after the format check) */
 	const struct bml_json *pq = bml_json_get(j, "privileged_queries");
-	int has_pq = pq && pq->type != BML_JSON_NULL;
+	int has_pq = pq && pq->type != BML_JSON_NULL; /* a Go map that is not nil (an empty {} counts) */
 	if (decode_queries(pq, "privileged_queries", r, 1, err))
 		goto fail;
-
+	/* format, loader, query names, required queries and the number of answers (in Go's order) */
 	if (r->format && !strcmp(r->format, "ebpf-caps 1")) {
 		*err = strdup(ebpf_caps1_msg);
 		goto fail;
 	}
-
+	/* Check in byte order of the query names (and keys), which makes Go's random map order deterministic (the wrong side, unknown queries, the shape of an answer) */
 	if (r->n_q) /* CONTRACT: qsort with a NULL base is UB (even when n is 0) */
 		qsort(r->q, r->n_q, sizeof *r->q, cmp_query);
 	for (size_t i = 0; i < r->n_q; i++)
 		if (r->q[i].n)
 			qsort(r->q[i].e, r->q[i].n, sizeof *r->q[i].e, cmp_entry);
 	int version = rc_format_version(r->format);
-	int trc = rc_check_target_queries(r, j, version, err);
+	int trc = rc_check_target_queries(r, j, version, err); /* Go's ParseRecordedCaps looks at the three queries before the other format checks */
 	if (trc) { if (trc > 0) goto newer; goto fail; }
 	int v10 = version >= 10;
-	int v9 = v10 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V9));
-	int v8 = v9 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V8));
-	int v7 = v8 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V7));
-	int v6 = v7 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V6));
+	int v9 = v10 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V9)); /* format 9 or later (the kfunc_loads and tracepoint_buffer queries) */
+	int v8 = v9 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V8)); /* format 8 or later (the four loader keys and the queries) */
+	int v7 = v8 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V7)); /* format 7 or later (usdt_attach) */
+	int v6 = v7 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V6)); /* Go's v6plus: the separation by privilege applies to formats 6, 7 and 8 */
 	int v5plus = v6 || (r->format && !strcmp(r->format, BML_RECORDED_FORMAT_V5));
 	if (!r->format || (!v5plus && strcmp(r->format, BML_RECORDED_FORMAT_V4) != 0 && strcmp(r->format, BML_RECORDED_FORMAT_V3) != 0 &&
 			   strcmp(r->format, BML_RECORDED_FORMAT_V2) != 0)) {
@@ -307,13 +309,13 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 			*rule = BML_JR_CAPS_FORMAT_UNKNOWN;
 		goto fail;
 	}
-
+	/* the loader's usdt_attach exists from ebpf-caps 7 (checked before Validate, so before a value error) */
 	if (r->loader.usdt_attach && r->loader.usdt_attach[0] && !v7) {
 		*err = rc_fmts("caps: loader key \"usdt_attach\" is new in \"" BML_RECORDED_FORMAT_V7 "\", but the format is \"%s\"", r->format);
 		goto newer;
 	}
 	if (rc_added_loader_version(r, version, err)) goto newer;
-
+	/* the loader's four keys exist from ebpf-caps 8 (the first one found is reported) */
 	if (!v8) {
 		const char *const nk[] = {"sockmap_attach", "lsm_cgroup_load", "fsession_load", "ksyscall_attach"};
 		const char *const nv[] = {r->loader.sockmap_attach, r->loader.lsm_cgroup_load, r->loader.fsession_load, r->loader.ksyscall_attach};
@@ -323,7 +325,7 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 				goto newer;
 			}
 	}
-
+	/* kfunc_loads and tracepoint_buffer exist from ebpf-caps 9, in either queries or privileged_queries, and are checked before the placement check */
 	static const char *const v9_queries[] = {BML_QUERY_KFUNC_LOADS, BML_QUERY_TRACEPOINT_BUFFER};
 	if (!v9)
 		for (size_t k = 0; k < 2; k++)
@@ -332,14 +334,14 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 					*err = rc_fmts("caps: query \"%s\" is new in \"" BML_RECORDED_FORMAT_V9 "\", but the format is \"%s\"", v9_queries[k], r->format);
 					goto newer;
 				}
-
+	/* uprobe_debug exists from ebpf-caps 10 (in either queries or privileged_queries) */
 	for (size_t i = 0; !v10 && i < r->n_q; i++)
 		if (!strcmp(r->q[i].name, BML_QUERY_UPROBE_DEBUG)) {
 			*err = rc_fmts("caps: query \"" BML_QUERY_UPROBE_DEBUG "\" is new in \"" BML_RECORDED_FORMAT_V10 "\", but the format is \"%s\"", r->format);
 			goto newer;
 		}
 	if (rc_added_query_version(r, version, err)) goto newer;
-
+	/* In ebpf-caps 6 and 7, queries that depend on privilege go in privileged_queries and those that do not go in queries (the wrong side is an error, and the sentence names the recording format). Format 5 and earlier have no privileged_queries. */
 	if (has_pq && !v6) {
 		*err = rc_fmts("caps: privileged_queries is new in \"" BML_RECORDED_FORMAT_V6 "\", but the format is \"%s\"", r->format);
 		goto newer;
@@ -358,13 +360,13 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 				goto fail;
 			}
 	}
-	if (!strcmp(r->format, BML_RECORDED_FORMAT_V2))
+	if (!strcmp(r->format, BML_RECORDED_FORMAT_V2)) /* func_args is a query of ebpf-caps 3 (added in bpf-mlir v0.17.0; the key counts even with a null value) */
 		for (size_t i = 0; i < r->n_q; i++)
 			if (!strcmp(r->q[i].name, BML_QUERY_FUNC_ARGS)) {
 				*err = rc_fmts("caps: query \"func_args\" is new in \"" BML_RECORDED_FORMAT_V3 "\", but the format is \"" BML_RECORDED_FORMAT_V2 "\"");
 				goto newer;
 			}
-
+	/* attach_types, attach_targets and ctx_access exist from ebpf-caps 4 (the first one in Go's order is reported) */
 	static const char *const v4_queries[] = {BML_QUERY_ATTACH_TYPE, BML_QUERY_ATTACH_TARGET, BML_QUERY_CTX_ACCESS};
 	if (!v5plus && strcmp(r->format, BML_RECORDED_FORMAT_V4) != 0)
 		for (size_t k = 0; k < sizeof v4_queries / sizeof *v4_queries; k++)
@@ -374,7 +376,7 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 						       r->format);
 					goto newer;
 				}
-
+	/* tracepoint_fields, struct_ops_members and ext_targets exist from ebpf-caps 5 */
 	static const char *const v5_queries[] = {BML_QUERY_TP_FIELDS, BML_QUERY_STRUCT_OPS_MEMBERS, BML_QUERY_EXT_TARGETS};
 	if (!v5plus)
 		for (size_t k = 0; k < sizeof v5_queries / sizeof *v5_queries; k++)
@@ -384,7 +386,7 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 						       r->format);
 					goto newer;
 				}
-
+	/* kfunc_protos and syscall_args exist from ebpf-caps 8 */
 	static const char *const v8_queries[] = {BML_QUERY_KFUNC_PROTOS, BML_QUERY_SYSCALL_ARGS};
 	if (!v8)
 		for (size_t k = 0; k < 2; k++)
@@ -397,7 +399,7 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 		*err = rc_fmts("caps: no loader declaration (a recorded target is judged for a named loader)");
 		goto fail;
 	}
-	char *ve = NULL;
+	char *ve = NULL; /* LoaderDecl.Validate (the value of usdt_attach) */
 	if (bml_loader_decl_validate(&r->loader, &ve)) {
 		*err = rc_fmts("caps: %s", ve ? ve : "");
 		free(ve);
@@ -433,7 +435,7 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 					    r->q[i].name, r->q[i].e[k].key);
 				goto fail;
 			}
-			if (!strcmp(r->q[i].name, BML_QUERY_UPROBE_DEBUG) && !a->file && !a->unknown && !a->error) {
+			if (!strcmp(r->q[i].name, BML_QUERY_UPROBE_DEBUG) && !a->file && !a->unknown && !a->error) { /* uprobe_debug */
 				*err = rc_fmts("caps: %s[\"%s\"]: an answer has exactly one of file / unknown / error", r->q[i].name, r->q[i].e[k].key);
 				goto fail;
 			}
@@ -441,7 +443,7 @@ struct bml_recorded *bml_recorded_parse_rule(const char *data, size_t len, const
 	}
 	bml_json_free(j);
 	return r;
-newer:
+newer: /* CapsFormatError: a key or query newer than the format (the JSON rule caps_key_newer_format) */
 	if (rule)
 		*rule = BML_JR_CAPS_KEY_NEWER_FORMAT;
 fail:

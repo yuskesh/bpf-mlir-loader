@@ -1,3 +1,6 @@
+/* req/usdt_points.c — computing the attach points of USDT: items (1) and (2) of the ref_ctr contract in section 8 of requirements_format.md, and the
+ * layout of the spec map. A port of Points in bpf-mlir's kernel/internal/usdtattach and of EncodeUSDTSpec in go/requirements. The attach code
+ * (abi/usdt.c) and the differential tests share it. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,7 +9,8 @@
 #include "req/usdt.h"
 #include "util/mutation.h"
 
-
+/* EncodeUSDTSpec: 16 bytes per argument n (1 to 12): kind u8, reg u8, 6 zero bytes, off i64 (little endian). A place that cannot be read, and every
+ * argument from the 13th on, gets kind 0. */
 int bml_usdt_encode_spec(const char *args, uint8_t spec[BML_USDT_SPEC_SIZE])
 {
 	memset(spec, 0, BML_USDT_SPEC_SIZE);
@@ -29,7 +33,7 @@ int bml_usdt_encode_spec(const char *args, uint8_t spec[BML_USDT_SPEC_SIZE])
 		uint8_t *b = spec + i * BML_USDT_ARG_SPEC_SIZE;
 		b[0] = !strcmp(a.kind, "const") ? BML_USDT_KIND_CONST : !strcmp(a.kind, "reg") ? BML_USDT_KIND_REG : BML_USDT_KIND_DEREF;
 		if (strcmp(a.kind, "const") != 0)
-			b[1] = (uint8_t)bml_usdt_reg_index(a.reg);
+			b[1] = (uint8_t)bml_usdt_reg_index(a.reg); /* only names that parse_arg knows get through */
 		uint64_t off = (uint64_t)a.off;
 		for (int k = 0; k < 8; k++)
 			b[8 + k] = (uint8_t)(off >> (8 * k));
@@ -39,12 +43,12 @@ int bml_usdt_encode_spec(const char *args, uint8_t spec[BML_USDT_SPEC_SIZE])
 	return rc;
 }
 
-
+/* the file offset for the address inside the file bytes of the PT_LOAD segment that contains it (for an exec file, an executable segment) */
 static int file_offset(const struct bml_elf *e, uint64_t addr, int exec, uint64_t *off)
 {
 	for (size_t i = 0; i < e->n_progs; i++) {
 		const struct bml_elf_phdr *p = &e->progs[i];
-		if (p->type != 1               || (exec && !(p->flags & 1           )))
+		if (p->type != 1 /* PT_LOAD */ || (exec && !(p->flags & 1 /* PF_X */)))
 			continue;
 		if (p->vaddr <= addr && addr < p->vaddr + p->filesz) {
 			*off = addr - p->vaddr + p->offset;
@@ -90,7 +94,7 @@ int bml_usdt_attach_points(const uint8_t *data, size_t len, const char *provider
 		if (strcmp(p->provider, provider) != 0 || strcmp(p->name, name) != 0)
 			continue;
 		uint64_t pc = p->pc;
-		if (bs && p->base != 0 && !BML_MUT("usdt.no_prelink"))
+		if (bs && p->base != 0 && !BML_MUT("usdt.no_prelink")) /* the prelink adjustment (as in libbpf's usdt.c) */
 			pc = pc + bs->addr - p->base;
 		struct bml_usdt_attach_point *q = &v[k];
 		q->index = k;

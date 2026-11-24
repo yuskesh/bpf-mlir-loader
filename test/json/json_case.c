@@ -1,3 +1,7 @@
+// test/corpus/json_case.c — prints the verdict on how a JSON input of the check is read (section 13 of the requirements
+// format specification) in the same form as the Go reference's runJSONCase (go/bindrt/conformance_json_test.go).
+//   json_case <kind> <file>...    kind is caps, maps or loader. One line per file: "<path>\tok" or "<path>\tinvalid\t<rule>"
+//   (an error that is not a JSON rule, such as a bad format, a missing loader or a NUL byte, has the rule "other")
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>

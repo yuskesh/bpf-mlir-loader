@@ -1,3 +1,5 @@
+/* req/check_attach.c — checking of the attach rows (a port of Go's checkNullableArgs, checkArchAndCtx, checkKprobeTarget and checkUprobe; split
+ * out of check.c). */
 #include "req/check_internal.h"
 
 #include <stdarg.h>
@@ -10,8 +12,9 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
-
+/* Judgement version 6: only rows for struct arguments (pointers to kernel types) are asked about; the unread `-` rows and the integer rows
+ * (i8 … u64) are not. There is one Unmet per struct index (the ID). Mutations: nullable_all_args counts every row (the version-5 scope) and
+ * nullable_single_unmet reports a single Unmet with ID 0 (the version-5 shape). */
 static int is_ptr_arg(const struct bml_str *t)
 {
 	if (BML_MUT("check.nullable_all_args"))
@@ -28,7 +31,7 @@ int ck_check_nullable(struct ck *c, const struct bml_attach *a)
 	if (nptr == 0)
 		return 0;
 	const char *P = a->program.p, *T = a->target.p;
-	const char *kind = NULL;
+	const char *kind = NULL; /* the same kind and Detail for every struct index */
 	char *msg = NULL;
 	if (!HAS(c, nullable_args, BML_QUERY_NULLABLE_ARGS)) {
 		kind = "arg_nullable_mark_unknown";
@@ -62,7 +65,7 @@ int ck_check_nullable(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* checkArchAndCtx. *target_arch is malloc-ed ("" means it could not be determined). */
 int ck_check_arch_ctx(struct ck *c, const struct bml_attach *a, char **target_arch)
 {
 	*target_arch = ck_dupn("");
@@ -133,14 +136,14 @@ int ck_check_kprobe_target(struct ck *c, const struct bml_attach *a, const char 
 			const struct bml_loader_decl *d = ck_loader_of(c);
 			const char *alias = bml_kv_get(d->kprobe_alias_prefix, d->n_kprobe_alias_prefix, target_arch);
 			if (!ask_alias) {
-
+				/* multi family: the loader does not re-attach (the syms of kprobe_multi are used as named) */
 			} else if (!alias) {
 				struct bml_buf b = {0};
 				bml_buf_adds(&b, "no fallback prefix known for the target arch ");
 				bml_buf_add_goquote(&b, target_arch, strlen(target_arch));
 				ck_add(c, "attach_alias_unknown", P, T, 0, bml_buf_take(&b));
 			} else if (alias[0] == 0) {
-
+				/* a loader that does not re-attach */
 			} else {
 				char *full = ck_fmtd("%s%s", alias, T);
 				int afound = 0;
@@ -188,13 +191,13 @@ int ck_check_kprobe_target(struct ck *c, const struct bml_attach *a, const char 
 	return 0;
 }
 
-
-
+/* uprobeABI (bpf-mlir go/requirements/uprobe.go): 0 means System V (continue with the argument check), 1 means not System V (uprobearg_abi), and
+ * 2 means it could not be determined (uprobearg_abi_unknown). If the check blocks, *detail is malloc-ed. */
 static int uprobe_abi(const char *target, const struct bml_dwarf_sub *sp, char **detail)
 {
-	static const int64_t sysv[] = {0x01, 0x02, 0x0c, 0x1d, 0x2c, 0x04, 0x19, 0x1a, 0x21, 0x2a, 0x2b};
+	static const int64_t sysv[] = {0x01, 0x02, 0x0c, 0x1d, 0x2c, 0x04, 0x19, 0x1a, 0x21, 0x2a, 0x2b}; /* C89 to C17 and C++ up to C++20 */
 	*detail = NULL;
-	if (sp->cc >= 0 && sp->cc != 1) {
+	if (sp->cc >= 0 && sp->cc != 1) { /* DW_CC_normal */
 		*detail = ck_fmtd("%s has DW_AT_calling_convention %lld (not DW_CC_normal) — uprobe.arg reads the SysV argument registers", target,
 				  (long long)sp->cc);
 		return 1;
@@ -213,7 +216,7 @@ static int uprobe_abi(const char *target, const struct bml_dwarf_sub *sp, char *
 	char *pr = bml_buf_take(&prod);
 	const char *p = pr ? pr : "";
 	int v = 2;
-	if (sp->lang == 0x16) {
+	if (sp->lang == 0x16) { /* DW_LANG_Go */
 		*detail = ck_fmtd("%s is a Go function%s — Go's ABIInternal passes arguments in registers that uprobe.arg (SysV) does not read; target a cgo //export C entry instead",
 				  target, p);
 		v = 1;
@@ -226,7 +229,7 @@ static int uprobe_abi(const char *target, const struct bml_dwarf_sub *sp, char *
 	return v;
 }
 
-
+/* uretprobeABI: the judgement is the same as uprobeABI's; the message is about reading the return-value register. */
 static int uretprobe_abi(const char *target, const struct bml_dwarf_sub *sp, char **detail)
 {
 	char *ud = NULL;
@@ -258,14 +261,15 @@ static int uretprobe_abi(const char *target, const struct bml_dwarf_sub *sp, cha
 	return v;
 }
 
-
-
+/* openUprobeBinary: the binary row, the recorded binary, its SHA-256 and the ELF. Returns 1 when it was opened (the caller closes *elf and *bin), 0
+ * after adding an Unmet and stopping, and -1 for a checking error. The Unmet name is `name`: the target for uprobe, the targets joined by
+ * commas for multi, and provider:name for usdt. */
 int ck_uprobe_open(struct ck *c, const struct bml_attach *a, const char *name, uint8_t **bin, struct bml_elf *elf)
 {
 	const char *P = a->program.p;
 	size_t blen = 0;
 	*bin = NULL;
-	if (a->binary_sha256.len == 0)
+	if (a->binary_sha256.len == 0) /* the message names the attach type (it used to say uprobe always) */
 		return ck_fail(c, ck_fmtd("program %s: %s attach row without a binary row", P, a->attach_type.p));
 	if (!HAS(c, uprobe_binary, BML_QUERY_UPROBE_BIN)) {
 		ck_add(c, "binary_unknown", P, name, 0, ck_dupn("no binary given"));
@@ -316,8 +320,9 @@ int ck_check_uprobe(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
-
+/* uprobeTargetUnmets: the symbol of one target and, for a return probe, the calling convention (return value), otherwise the calling
+ * convention and the arguments. The DWARF source is resolved only for a target that reads DWARF, and a definite mismatch of a split file stops
+ * with only that Unmet. */
 void ck_uprobe_target(struct ck *c, const struct bml_attach *a, struct bml_elf *elfp, const char *T, int ret, struct ck_dsrc *src)
 {
 	const char *P = a->program.p;
@@ -331,7 +336,8 @@ void ck_uprobe_target(struct ck *c, const struct bml_attach *a, struct bml_elf *
 			return;
 		}
 	}
-
+	/* Judgement version 8: uretprobe reads the return-value register (rax in System V), so even without argument rows the check blocks unless the
+		 * language of the target's compilation unit is C-like. */
 	if (ret && !BML_MUT("check.uretprobe_abi_skip")) {
 		struct bml_dwarf_sub sp;
 		char *derr = NULL;
@@ -350,7 +356,7 @@ void ck_uprobe_target(struct ck *c, const struct bml_attach *a, struct bml_elf *
 	if (a->n_uprobe_args > 0) {
 		struct bml_dwarf_sub sp;
 		char *derr = NULL;
-
+		/* The numbers of the arguments whose type is ptr (rawPointers); the DIE is walked directly, for those formal parameters only. */
 		size_t nraw = 0;
 		for (size_t i = 0; i < a->n_uprobe_args; i++)
 			if (!strcmp(a->uprobe_args[i].type.p, "ptr") && (uint64_t)a->uprobe_args[i].n > nraw && a->uprobe_args[i].n <= 4096)
@@ -363,7 +369,8 @@ void ck_uprobe_target(struct ck *c, const struct bml_attach *a, struct bml_elf *
 			c->oom = 1;
 		int drc = ck_dsrc_subprogram(src, T, 1, raw, nraw, &sp, &derr);
 		free(raw);
-
+		/* Calling convention: uprobe.arg reads System V registers. If DW_AT_language of the target's compilation unit is not C-like, the argument check
+		 * is skipped and the load is blocked. */
 		if (drc == 0) {
 			char *detail = NULL;
 			int v = uprobe_abi(T, &sp, &detail);
@@ -385,14 +392,14 @@ void ck_uprobe_target(struct ck *c, const struct bml_attach *a, struct bml_elf *
 				    ck_fmtd("%s takes %zu arguments in the binary's DWARF, but the object reads argument %lld", T, nps, (long long)k->n));
 			} else {
 				const struct bml_dwarf_param *p = &ps[k->n - 1];
-
+				/* A ptr request needs the pointer spelling (direct evidence from the DIE); the older types keep their older spelling. */
 				const char *pt = !strcmp(k->type.p, "ptr") ? (p->pointer ? p->pointer : "") : p->type;
 				if (pt[0] == 0)
 					ck_add(c, "uprobearg_unknown", P, name, 0, ck_fmtd("argument %s has a type this check cannot read", p->name));
 				else if (strcmp(pt, k->type.p) != 0)
 					ck_add(c, "uprobearg", P, name, 0,
 					    ck_fmtd("argument %lld (%s) of %s is %s in the binary's DWARF, but the object reads it as %s", (long long)k->n,
-						 p->name[0] ? p->name : "unnamed", T, pt, k->type.p));
+						 p->name[0] ? p->name : "unnamed", T, pt, k->type.p)); /* "unnamed" is what ArgName gives for a parameter without a name */
 			}
 			free(name);
 		}

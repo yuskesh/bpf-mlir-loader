@@ -1,3 +1,4 @@
+/* Keeps the order of the exceptions of the existing formats and checks only the new keys against the minimum format. */
 #include "caps/recorded_internal.h"
 
 #include <stdio.h>

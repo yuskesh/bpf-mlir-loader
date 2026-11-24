@@ -1,3 +1,5 @@
+/* shim/build/internal.h — shared helpers of the build-time exports. They are static inline so that libbml_build.a's
+ * global (T) symbols are exactly build.h's names (the gate checks it). */
 #ifndef BML_SHIM_BUILD_INTERNAL_H
 #define BML_SHIM_BUILD_INTERNAL_H
 
@@ -8,7 +10,7 @@
 #include "shim/build/build.h"
 #include "util/gostr.h"
 
-
+/* err starts as OK (text NULL, rule "", offset -1, detail NULL) */
 static inline void bb_init(struct bml_build_error *err)
 {
 	memset(err, 0, sizeof *err);
@@ -23,7 +25,7 @@ static inline int bb_nomem(struct bml_build_error *err)
 	return err->code;
 }
 
-
+/* FAIL with a copy of text (NULL text → NOMEM) */
 static inline int bb_fail(struct bml_build_error *err, const char *text)
 {
 	if (!text || !(err->text = strdup(text)))
@@ -32,7 +34,7 @@ static inline int bb_fail(struct bml_build_error *err, const char *text)
 	return err->code;
 }
 
-
+/* UNSUPPORTED: "unsupported: <class>: <what>" */
 static inline int bb_unsupported(struct bml_build_error *err, const char *cls, const char *what)
 {
 	struct bml_buf b = {0};

@@ -1,3 +1,4 @@
+/* Recorded queries: enumval, kstructsize, extern, guard, funcret and fibflags. */
 #include "caps/recorded_internal.h"
 
 #include <stdlib.h>

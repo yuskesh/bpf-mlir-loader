@@ -1,3 +1,5 @@
+/* req_elf.c — the section-reading part of requirements.FromELF (bpf-mlir's go/requirements/requirements.go, lines 391-413).
+ * The derivation of MapFields (section 7) was added later (a step of judgement version 3). */
 #include "req/from_elf.h"
 
 #include <stdlib.h>
@@ -12,9 +14,9 @@ int bml_req_from_elf(const void *data, size_t len, struct bml_requirements **out
 	memset(e, 0, sizeof(*e));
 	e->parse.row = "";
 	e->parse.rule = "";
-	
-
-
+	/* checkELFVersion of bpf-mlir's go/requirements: FromELF looks at all 4 bytes of e_version before debug/elf does. The text is byte-identical
+	 * to Go's. (bml's own elf.c rejects the same file with debug/elf's text "mismatched ELF version", which differed in the comparison of texts
+	 * against the live differential run.) A header shorter than 24 bytes gives ReadAt's io.EOF, and an unknown EI_DATA value is left to debug/elf. */
 	if (len < 24) {
 		e->stage = BML_REQ_ELF_OPEN;
 		e->msg = strdup("ELF header: EOF");
@@ -60,7 +62,7 @@ int bml_req_from_elf(const void *data, size_t len, struct bml_requirements **out
 	}
 	int rc = bml_req_parse((const char *)sec, slen, out, &e->parse);
 	if (rc == 0) {
-		char *serr = NULL;
+		char *serr = NULL; /* an untyped error (Go's fmt.Errorf; the stage is PARSE and the rule is "") */
 		if (bml_req_check_sleepable_sections(&elf, *out, &serr)) {
 			bml_elf_close(&elf);
 			bml_requirements_free(*out);
@@ -69,8 +71,8 @@ int bml_req_from_elf(const void *data, size_t len, struct bml_requirements **out
 			e->parse.msg = serr;
 			return -1;
 		}
-		bml_map_fields_derive(&elf, &(*out)->map_fields);
-		if (bml_req_kfunc_profiles_derive(&elf, *out)) {
+		bml_map_fields_derive(&elf, &(*out)->map_fields); /* as in Go's FromELF: a failure becomes the failed state and is not an error */
+		if (bml_req_kfunc_profiles_derive(&elf, *out)) { /* the initial kfunc profiles */
 			bml_elf_close(&elf);
 			bml_requirements_free(*out);
 			*out = NULL;
@@ -81,7 +83,7 @@ int bml_req_from_elf(const void *data, size_t len, struct bml_requirements **out
 	}
 	bml_elf_close(&elf);
 	if (rc) {
-
+		/* Even when Parse returns both r and sc.Err(), Go's FromELF returns the error; r is discarded. */
 		bml_requirements_free(*out);
 		*out = NULL;
 		e->stage = BML_REQ_ELF_PARSE;

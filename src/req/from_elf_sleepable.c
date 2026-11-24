@@ -1,3 +1,5 @@
+/* req/from_elf_sleepable.c — a port of checkSleepableSections in bpf-mlir's go/requirements/sleepable.go. cilium/ebpf decides BPF_F_SLEEPABLE from
+ * the section name, so the sections that Parse does not look at are compared with the sleepable rows in both directions. */
 #include "req/from_elf.h"
 
 #include <stdlib.h>
@@ -23,14 +25,14 @@ static int declared(const struct bml_requirements *r, const char *name)
 
 static const struct bml_attach *sleepable_row(const struct bml_requirements *r, const char *prog)
 {
-	const struct bml_attach *last = NULL;
+	const struct bml_attach *last = NULL; /* Go's map of rows: a later row of the same program wins */
 	for (size_t i = 0; i < r->n_attaches; i++)
 		if (r->attaches[i].sleepable && !strcmp(r->attaches[i].program.p, prog))
 			last = &r->attaches[i];
 	return last;
 }
 
-
+/* Go's holds is keyed by the section name: if one section of that name has a FUNC, all of them are satisfied */
 static int name_held(const struct bml_elf *e, const char *holds, const char *name)
 {
 	for (size_t i = 0; i < e->n_sections; i++)
@@ -43,7 +45,7 @@ static char *fail(const char *fmt, const char *a, const char *b, const char *c, 
 {
 	struct bml_buf x = {0};
 	for (const char *p = fmt; *p; p++) {
-		if (p[0] == '%' && p[1] == 'q') {
+		if (p[0] == '%' && p[1] == 'q') { /* the %q of a, b, c and d in order */
 			const char *v = a;
 			a = b, b = c, c = d, d = NULL;
 			bml_buf_add_goquote(&x, v, strlen(v));
@@ -60,7 +62,7 @@ static char *fail(const char *fmt, const char *a, const char *b, const char *c, 
 	return bml_buf_take(&x);
 }
 
-
+/* the section name of a symbol (only for symbols defined as FUNC; NULL otherwise) */
 static const char *func_section(const struct bml_elf *e, const struct bml_elf_sym *s)
 {
 	if (BML_ST_TYPE(s->info) != BML_STT_FUNC || s->shndx == BML_SHN_UNDEF || s->shndx >= e->n_sections)
@@ -109,7 +111,7 @@ int bml_req_check_sleepable_sections(const struct bml_elf *e, const struct bml_r
 			*err = fail("sleepable: section %q holds no function declared as a program in the requirements", e->sections[i].name, NULL, NULL, NULL);
 			goto out;
 		}
-
+	/* in program order (Go's req.Programs; the entry is a map in which the last FUNC wins) */
 	for (size_t p = 0; p < r->n_programs; p++) {
 		const char *name = r->programs[p].symbol.p, *sec = NULL;
 		for (size_t i = 0; i < ns; i++) {
@@ -135,7 +137,7 @@ int bml_req_check_sleepable_sections(const struct bml_elf *e, const struct bml_r
 			goto out;
 		}
 	}
-
+	/* from the rows to the sections (Go iterates a map; here the attach order is used so that the error text is deterministic) */
 	for (size_t i = 0; i < r->n_attaches; i++) {
 		const struct bml_attach *a = &r->attaches[i];
 		if (!a->sleepable)

@@ -1,4 +1,11 @@
 #!/bin/bash
+# scripts/corpus-parse.sh — runs the parse cases of the conformance corpus through the C implementation and compares the
+# result with want.json.
+#
+#   scripts/corpus-parse.sh [TOOLS_DIR]     # default build/tools (scripts/build-tools.sh)
+#
+# The number of cases is checked too: the number of cases and the number of comparisons must be equal and not zero (a
+# comparison of zero cases would pass diff).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLS="${1:-$HERE/build/tools}"

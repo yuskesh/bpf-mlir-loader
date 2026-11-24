@@ -1,3 +1,4 @@
+/* caps/loader.c — the loader declaration (the Cilium022 preset, reading the table, freeing it) and freeing the list of answers. It was split out of check.c. */
 #include "caps/caps.h"
 
 #include <stdlib.h>
@@ -19,8 +20,8 @@ const struct bml_loader_decl bml_loader_cilium022 = {
 	.btf_rewrite = (struct bml_kv[]){{"func_global", "rewrite"}, {"decl_tag", "rewrite"}, {"type_tag", "rewrite"}, {"enum64", "rewrite"}},
 	.n_btf_rewrite = 4,
 	.has_btf_rewrite = 1,
-	.usdt_attach = "none",
-
+	.usdt_attach = "none", /* cilium v0.22 does not attach USDT */
+	/* sockmap uses BPF_LINK_CREATE, lsm_cgroup / fsession do not look up a BTF id, and ksyscall attaches to the bare name and fails */
 	.sockmap_attach = "link",
 	.lsm_cgroup_load = "none",
 	.fsession_load = "none",
@@ -34,7 +35,7 @@ const struct bml_loader_decl bml_loader_cilium022 = {
 	.btf_rewrite = (struct bml_kv[]){{"func_global", "rewrite"}, {"decl_tag", "rewrite"}, {"type_tag", "rewrite"}, {"enum64", "rewrite"}}, \
 	.n_btf_rewrite = 4, .has_btf_rewrite = 1, .lsm_cgroup_load = "none", .fsession_load = "none", .ksyscall_attach = "none"
 
-
+/* Cilium022USDT: the same as Cilium022 except for the name and usdt_attach ref_ctr */
 const struct bml_loader_decl bml_loader_cilium022usdt = {
 	.name = "cilium-v0.22-usdt",
 	CILIUM022_BODY,
@@ -42,7 +43,7 @@ const struct bml_loader_decl bml_loader_cilium022usdt = {
 	.sockmap_attach = "link",
 };
 
-
+/* Cilium022ProgAttach: the same as Cilium022 except for the name and sockmap_attach prog_attach */
 const struct bml_loader_decl bml_loader_cilium022progattach = {
 	.name = "cilium-v0.22-progattach",
 	CILIUM022_BODY,
@@ -50,8 +51,8 @@ const struct bml_loader_decl bml_loader_cilium022progattach = {
 	.sockmap_attach = "prog_attach",
 };
 
-
-
+/* Cilium022Ksyscall: the same as Cilium022 except for the name and ksyscall_attach prefix (CILIUM022_BODY has ksyscall_attach none,
+ * so it is written out in full to avoid -Woverride-init) */
 const struct bml_loader_decl bml_loader_cilium022ksyscall = {
 	CILIUM_MEMORY_DECLS,
 	.name = "cilium-v0.22-ksyscall",
@@ -70,8 +71,8 @@ const struct bml_loader_decl bml_loader_cilium022ksyscall = {
 	.ksyscall_attach = "prefix",
 };
 
-
-
+/* Cilium022USDTKsyscall: Cilium022USDT with another name and ksyscall_attach prefix, so it differs from Cilium022 only in the two columns
+ * usdt_attach ref_ctr and ksyscall_attach prefix (it is written out in full for the same reason as above) */
 const struct bml_loader_decl bml_loader_cilium022usdtksyscall = {
 	CILIUM_MEMORY_DECLS,
 	.name = "cilium-v0.22-usdt-ksyscall",
@@ -108,7 +109,7 @@ int bml_loader_decl_validate(const struct bml_loader_decl *d, char **err)
 		*err = bml_buf_take(&b);
 		return -1;
 	}
-
+	/* validDeclValue (in the order sockmap_attach, lsm_cgroup_load, fsession_load, ksyscall_attach) */
 	const struct {
 		const char *key, *v, *a, *b;
 	} kv[] = {
@@ -138,7 +139,7 @@ int bml_loader_decl_validate(const struct bml_loader_decl *d, char **err)
 
 const char *bml_kv_get(const struct bml_kv *kv, size_t n, const char *key)
 {
-
+	/* like reading a Go map: a table built from JSON has no duplicate keys (the parser rejects them) */
 	for (size_t i = 0; i < n; i++)
 		if (strcmp(kv[i].key, key) == 0)
 			return kv[i].value;
@@ -180,8 +181,8 @@ void bml_strs_free(struct bml_strs *v)
 	v->n = 0;
 }
 
-
-
+/* BmlLibbpf17 (since bpf-mlir v0.16.0): the declaration of libbpf v1.7.0 with this repository's guard. L1 keeps all four features, L2 does not
+ * re-attach (x86_64 gives ""), L3 reopens the path, and L4 poisons an absent field. */
 const struct bml_loader_decl bml_loader_bmllibbpf17 = {
 	.arena_cast = "preserve",
 	.arena_premmap = "create_then_mmap",
@@ -196,7 +197,7 @@ const struct bml_loader_decl bml_loader_bmllibbpf17 = {
 	.has_btf_rewrite = 1,
 };
 
-
+/* A preset by name (Go's LoaderPresets). NULL if there is none. */
 const struct bml_loader_decl *bml_loader_preset(const char *name)
 {
 	if (!strcmp(name, bml_loader_cilium022.name))

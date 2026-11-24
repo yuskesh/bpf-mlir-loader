@@ -1,4 +1,11 @@
 #!/bin/bash
+# scripts/corpus-maps.sh — runs the maps part of the conformance corpus (the map declarations of section 12) through the C
+# check and compares the result with want.json.
+#
+#   scripts/corpus-maps.sh [TOOLS_DIR]     # default build/tools
+#
+# The number of cases is checked too. A case in the PENDING table is one for which part of the check is not yet in C (the
+# reason is named); its differences are counted and reported separately, and a difference outside the table is a failure.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLS="${1:-$HERE/build/tools}"

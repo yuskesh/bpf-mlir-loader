@@ -1,3 +1,5 @@
+/* caps/recorded_v16.c — the tracepoint_fields and syscall_args of recorded caps, a C port of bpf-mlir's CheckTracepointField and CheckSyscallArg
+ * of RecordedCaps. A missing key for the types strptr and strarray is Unknown (no other answer is substituted); a missing key for an integer type is an error, as before. */
 #include "caps/recorded_internal.h"
 
 #include <stdlib.h>
@@ -7,7 +9,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* whether c.Queries[q][key] exists */
 static int has_key(const struct bml_recorded *r, const char *q, const char *key)
 {
 	for (size_t i = 0; i < r->n_q; i++)
@@ -18,7 +20,7 @@ static int has_key(const struct bml_recorded *r, const char *q, const char *key)
 	return 0;
 }
 
-
+/* values that need evidence of the type: strptr and strarray, and byte arrays [N]u8 / [N]i8 */
 static int is_str(const char *t)
 {
 	return !BML_MUT("caps.rec_str_absent_fatal") && (!strcmp(t, "strptr") || !strcmp(t, "strarray") || t[0] == '[');
@@ -37,21 +39,21 @@ static int keyed(void *ctx, const char *q, char *key, int str, const char *unkno
 	return st;
 }
 
-
+/* the key is "<cat>/<event>/<field>/<offset>/<number of bytes>/<i|u|strptr|strarray>" (TPFieldKey) */
 static int rec_tp_field(void *ctx, const char *event, const char *field, int64_t off, int64_t bytes, const char *sign, struct bml_strs *out,
 			char **msg)
 {
 	return keyed(ctx, BML_QUERY_TP_FIELDS, bml_caps_tpfield_key(event, field, off, bytes, sign), is_str(sign), NULL, out, msg);
 }
 
-
+/* the key is "<syscall>/<n>/<type>" (SysargKey) */
 static int rec_syscall_arg(void *ctx, const char *name, int64_t n, const char *type, struct bml_strs *out, char **msg)
 {
 	return keyed(ctx, BML_QUERY_SYSCALL_ARGS, rc_fmts("%s/%lld/%s", name, (long long)n, type), is_str(type),
 		     "no recorded syscall string argument answer", out, msg);
 }
 
-
+/* RecordedCaps.UprobeDebugFile: a relative path in a file answer is relative to the directory of caps.json (not the cwd of the calling process) */
 static int rec_uprobe_debug(void *ctx, const char *program, const uint8_t *id, size_t n, uint8_t **data, size_t *len, char **path, char **msg)
 {
 	const struct bml_recorded *r = ctx;

@@ -1,3 +1,4 @@
+/* Port of the extern rows of ksymvar.go. Asking about guards and judging them is a separate layer. */
 #include "req/parse_internal.h"
 
 #include <string.h>

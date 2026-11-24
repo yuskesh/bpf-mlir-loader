@@ -1,4 +1,7 @@
 #!/bin/bash
+# scripts/corpus-json.sh — runs the json/ part of the conformance corpus (how the JSON inputs of the check are read, section 13
+# of the requirements format specification) through the C reader and compares the result with want.
+#   scripts/corpus-json.sh [TOOLS_DIR]     # default build/tools. The number of cases is checked too
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLS="${1:-$HERE/build/tools}"

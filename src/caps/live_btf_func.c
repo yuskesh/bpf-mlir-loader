@@ -1,3 +1,8 @@
+/* caps/live_btf_func.c — a C port of kload's CheckFuncParam (describeParam) and of CheckFuncArgs (added in bpf-mlir v0.17.0). It was
+ * split out of live_btf.c. It reads only the vmlinux BTF and loads no program. Mismatch and Unknown sentences follow Go's
+ * fmt formats byte for byte (Unknown is Go's fmt.Errorf("...: %w", requirements.ErrUnknown); the ErrUnknown text is
+ * "cannot be determined on this target").
+ * It also holds compareProto and CheckStructOpsMember. */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -9,7 +14,7 @@
 
 #define ERR_UNKNOWN "cannot be determined on this target"
 
-
+/* The Unknown of Go's fmt.Errorf("<prefix>: %w", ErrUnknown) */
 static int unknown(char **msg, const char *fmt, const char *a, const char *b)
 {
 	struct bml_buf m = {0};
@@ -19,7 +24,8 @@ static int unknown(char **msg, const char *fmt, const char *a, const char *b)
 	return BML_Q_UNKNOWN;
 }
 
-
+/* Look up vmlinux and the FUNC_PROTO of the FUNC with the given name (the first three steps of Go's CheckFuncParam and
+ * CheckFuncArgs, with the same sentences). Success returns 0 and fills *fp; anything else returns the answer. */
 static int func_proto(struct bml_live *l, const char *name, const struct bml_kbtf **kb, struct kbtf_type *fp, struct bml_strs *out, char **msg)
 {
 	const char *verr;
@@ -39,10 +45,10 @@ static int func_proto(struct bml_live *l, const char *name, const struct bml_kbt
 	}
 	struct kbtf_type fn;
 	bml_kbtf_type(*kb, id, &fn);
-	bml_kbtf_type(*kb, fn.size_type, fp);
+	bml_kbtf_type(*kb, fn.size_type, fp); /* Go uses the direct type of fn.Type (not UnderlyingType) */
 	if (fp->kind != KBTF_FUNC_PROTO)
 		return unknown(msg, "kernel function %s has no FUNC_PROTO%s", name, NULL);
-	return -1;
+	return -1; /* continue */
 }
 
 int bml_live_func_btf_id(struct bml_live *l, const char *name, uint32_t *id, char **err)
@@ -60,13 +66,13 @@ int bml_live_func_btf_id(struct bml_live *l, const char *name, uint32_t *id, cha
 	return rc ? -1 : 0;
 }
 
-
+/* requirements.ArgName: an argument without a name is called `unnamed` */
 const char *bml_arg_name(const char *n)
 {
 	return n && n[0] ? n : "unnamed";
 }
 
-
+/* kload's describeParam: integers are i32, u64, ...; a pointer is ptr; an enum is enum<bits>; anything else is %T */
 static void describe_param(const struct bml_kbtf *kb, struct bml_buf *b, uint32_t type)
 {
 	int cyc;
@@ -94,7 +100,8 @@ static int is_int_spelling(const char *s)
 	return 0;
 }
 
-
+/* kload's compareProto, shared by struct_ops members and ext replacement targets (what is the subject of the sentence).
+ * nargs < 0 and ret "" are not matched. */
 int lv_compare_proto(const struct bml_kbtf *kb, const struct kbtf_type *fp, const char *what, int64_t nargs, const char *ret,
 		     const struct bml_str *args, size_t n_args, struct bml_strs *out)
 {
@@ -108,7 +115,7 @@ int lv_compare_proto(const struct bml_kbtf *kb, const struct kbtf_type *fp, cons
 		int cyc;
 		uint32_t u = bml_kbtf_underlying(kb, fp->size_type, &cyc);
 		struct bml_buf got = {0};
-		if (fp->size_type == 0 || (!cyc && u == 0))
+		if (fp->size_type == 0 || (!cyc && u == 0)) /* describeRet: nil or Void is void */
 			bml_buf_adds(&got, "void");
 		else
 			describe_param(kb, &got, fp->size_type);
@@ -172,7 +179,8 @@ int lv_compare_proto(const struct bml_kbtf *kb, const struct kbtf_type *fp, cons
 	return 0;
 }
 
-
+/* kload's CheckStructOpsMember: if `bpf_struct_ops_<struct>` is not in vmlinux (it is in a module) the answer is Unknown;
+ * otherwise the type and signature of the member are compared. */
 int bml_live_struct_ops_member(struct bml_live *l, const char *strct, const char *member, int64_t nargs, const char *ret, const struct bml_str *args,
 			       size_t n_args, struct bml_strs *out, char **msg)
 {
@@ -248,7 +256,7 @@ int bml_live_func_param(struct bml_live *l, const char *name, int64_t n, const c
 	if (rc >= 0)
 		return rc;
 	struct bml_buf b = {0};
-	if (n < 1) {
+	if (n < 1) { /* the parser only accepts n >= 1 (Go would panic on Params[n-1]) */
 		*msg = strdup("kprobearg index below 1");
 		return BML_Q_ERROR;
 	}
@@ -285,7 +293,7 @@ int bml_live_func_args(struct bml_live *l, const char *name, const struct bml_st
 	if (rc >= 0)
 		return rc;
 	struct bml_buf b = {0};
-	if (n_args > fp.vlen) {
+	if (n_args > fp.vlen) { /* return one mismatch (the arguments are not compared one by one) */
 		bml_buf_addf(&b, "kernel function %s takes %u arguments in the target BTF, but the object declares %zu", name, fp.vlen, n_args);
 		return lv_push(out, &b) ? lv_oom(out, msg) : BML_Q_OK;
 	}
@@ -307,7 +315,7 @@ int bml_live_func_args(struct bml_live *l, const char *name, const struct bml_st
 			bml_kbtf_type(kb, bml_kbtf_underlying(kb, p.size_type, &cyc), &st);
 			if (cyc || st.kind != KBTF_STRUCT || strcmp(st.name, args[i].p) != 0) {
 				bml_buf_addf(&b, "argument %zu (%s) of kernel function %s points to ", i, bml_arg_name(pn), name);
-				bml_kbtf_format(kb, &b, p.size_type, 0, 's');
+				bml_kbtf_format(kb, &b, p.size_type, 0, 's'); /* the raw pointee that Go's %s prints */
 				bml_buf_addf(&b, " in the target BTF, not struct %s", args[i].p);
 			}
 		}

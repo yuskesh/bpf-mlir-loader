@@ -1,3 +1,8 @@
+/* caps/live_target_rows.c — a C port of netkit.go, sleepable.go and helper_target.go in kernel/internal/kload of the Go reference loader.
+ * The answer rules are split into functions that make no syscall, so that unit tests can check the tables. The answers of a real
+ * kernel are measured in a VM.
+ * Known difference from Go: the per-process memo of helper_target (keyed by boot_id, uid and capeff) is not ported, so two rows
+ * with the same target are probed twice. */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -9,7 +14,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* The answer of HasNetkit: link_rc is an fd (>= 0) or -errno */
 int bml_live_netkit_answer(int link_rc)
 {
 	if (link_rc >= 0)
@@ -21,7 +26,7 @@ int bml_live_netkit_answer(int link_rc)
 	return BML_LV_UNKNOWN;
 }
 
-
+/* Only the VerifierError log line "Program of this type cannot be sleepable" counts as a rejection of the type (the caller checks first that the control load succeeds) */
 int bml_live_sleepable_refused_by_type(int verifier, const char *const *lines, size_t n)
 {
 	if (BML_MUT("live.sleepable_any_refusal"))
@@ -34,7 +39,7 @@ int bml_live_sleepable_refused_by_type(int verifier, const char *const *lines, s
 	return 0;
 }
 
-
+/* A rejection at a real target is recognised only for a VerifierError with EINVAL and "helper call is not allowed in probe" */
 int bml_live_helper_target_denied(int err, int verifier, const char *const *lines, size_t n)
 {
 	if (BML_MUT("live.helper_target_any_einval") && err == EINVAL)
@@ -59,14 +64,14 @@ static void insn(uint8_t *out, uint8_t code, uint8_t regs, int16_t off, int32_t 
 
 static const uint8_t mov_ret[16] = {0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 
-
+/* Go's three probes fold a failure to close into the answer (Unknown for netkit and sleepable, an error for helper_target). 0 or -errno */
 static int probe_close(int fd)
 {
 	int e = lv_close_checked(fd);
 	return BML_MUT("live.target_close_ignored") ? 0 : e;
 }
 
-
+/* A port of errors.Join: add a line to the existing sentence and make it Unknown */
 static int add_close_unknown(char **msg, const char *what, int err)
 {
 	char *e = bml_go_errno_str(err), *line = NULL;
@@ -119,7 +124,7 @@ int bml_live_netkit(struct bml_live *l, const char *direction, int *out, char **
 	int prog = r.fd;
 	lv_res_free(&r);
 	uint8_t attr[64] = {0};
-	uint32_t v[3] = {(uint32_t)prog, 0xffffffffu                                            , at};
+	uint32_t v[3] = {(uint32_t)prog, 0xffffffffu /* an ifindex that no interface has */, at};
 	memcpy(attr, v, sizeof v);
 	int rc = lv_bpf(BPF_LINK_CREATE, attr, sizeof attr);
 	int ans = bml_live_netkit_answer(rc), st;
@@ -136,7 +141,7 @@ int bml_live_netkit(struct bml_live *l, const char *direction, int *out, char **
 		st = lv_unknownf(msg, "create a netkit %s link: %s", direction, e ? e : "");
 		free(e);
 	}
-	int pe = probe_close(prog);
+	int pe = probe_close(prog); /* Go's defer: close at the end whatever the answer, and turn a failure to close into Unknown */
 	if (pe) {
 		*out = 0;
 		st = add_close_unknown(msg, "close netkit probe program", -pe);
@@ -202,7 +207,7 @@ int bml_live_sleepable(struct bml_live *l, const char *pt, const char *at, int *
 			st = lv_unknownf(msg, "sleepable probe (%s/%s): the sleepable load was refused (%s)", pt, at, stxt ? stxt : "");
 			st = add_close_unknown(msg, "close the control sleepable probe program", -e);
 		} else if (bml_live_sleepable_refused_by_type(s.verifier, (const char *const *)s.lines, s.n_lines))
-			st = BML_Q_OK;
+			st = BML_Q_OK; /* *out stays 0 */
 		else
 			st = lv_unknownf(msg, "sleepable probe (%s/%s): the sleepable load was refused for another reason than the program type (%s) while the control load succeeded",
 					 pt, at, stxt ? stxt : "");
@@ -213,21 +218,21 @@ int bml_live_sleepable(struct bml_live *l, const char *pt, const char *at, int *
 	return st;
 }
 
-
+/* read the struct path * in the first slot of ctx, avoid NULL, and call d_path into an initialised 64-byte buffer */
 static size_t helper_target_insns(uint8_t ins[][8])
 {
 	size_t n = 0;
-	insn(ins[n++], 0x79, 0x11, 0, 0);
-	insn(ins[n++], 0x15, 0x01, 13, 0);
-	insn(ins[n++], 0xb7, 0x00, 0, 0);
+	insn(ins[n++], 0x79, 0x11, 0, 0);  /* r1 = *(u64 *)(r1 + 0) */
+	insn(ins[n++], 0x15, 0x01, 13, 0); /* if r1 == 0 goto done */
+	insn(ins[n++], 0xb7, 0x00, 0, 0);  /* r0 = 0 */
 	for (int16_t off = -64; off < 0; off += 8)
-		insn(ins[n++], 0x7b, 0x0a, off, 0);
-	insn(ins[n++], 0xbf, 0xa2, 0, 0);
-	insn(ins[n++], 0x07, 0x02, 0, -64);
-	insn(ins[n++], 0xb7, 0x03, 0, 64);
-	insn(ins[n++], 0x85, 0x00, 0, 147);
-	insn(ins[n++], 0xb7, 0x00, 0, 0);
-	insn(ins[n++], 0x95, 0x00, 0, 0);
+		insn(ins[n++], 0x7b, 0x0a, off, 0); /* *(u64 *)(r10 + off) = r0 */
+	insn(ins[n++], 0xbf, 0xa2, 0, 0);    /* r2 = r10 */
+	insn(ins[n++], 0x07, 0x02, 0, -64);  /* r2 += -64 */
+	insn(ins[n++], 0xb7, 0x03, 0, 64);   /* r3 = 64 */
+	insn(ins[n++], 0x85, 0x00, 0, 147);  /* call d_path */
+	insn(ins[n++], 0xb7, 0x00, 0, 0);    /* done: r0 = 0 */
+	insn(ins[n++], 0x95, 0x00, 0, 0);    /* exit */
 	return n;
 }
 
@@ -262,7 +267,7 @@ int bml_live_helper_target(struct bml_live *l, const char *pt, int64_t id, const
 	if (load_fentry(l, "typed_dpath", h->target.p, 0, (const uint8_t *)ins, n, &r) == 0) {
 		int e = probe_close(r.fd);
 		lv_res_free(&r);
-		if (e) {
+		if (e) { /* Go's "helper_target close: %w" is an error, not Unknown */
 			char *t = bml_go_errno_str(-e);
 			struct bml_buf b = {0};
 			bml_buf_addf(&b, "helper_target close: %s", t ? t : "");

@@ -1,3 +1,4 @@
+/* The finite arena recipe. Call it only after the initial_spec has been validated in canonical form. */
 #ifndef BML_CAPS_LIVE_ARENA_H
 #define BML_CAPS_LIVE_ARENA_H
 #include "caps/live.h"

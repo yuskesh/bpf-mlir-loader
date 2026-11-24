@@ -1,3 +1,5 @@
+// cmd/bml-precheck/emit.c — reading files, run_as, the output JSON (the "ebpf-precheck 1" shape of section 11 of the
+// requirements format specification) and usage_error. Split out of main.c.
 #include "bml-precheck/precheck.h"
 
 #include <errno.h>
@@ -69,7 +71,7 @@ static void jkv(struct bml_buf *b, const struct bml_kv *kv, size_t n, int has)
 		bml_buf_adds(b, "null");
 		return;
 	}
-
+	/* The Go reference's JSON encoding writes map keys in sorted order, so do the same. */
 	size_t *idx = calloc(n ? n : 1, sizeof(*idx));
 	for (size_t i = 0; i < n; i++)
 		idx[i] = i;
@@ -129,7 +131,7 @@ int pc_emit(struct out *o, const char *result, int code)
 		jstr(&b, o->pe.rule);
 		bml_buf_adds(&b, "}");
 	}
-	if (o->mp.n) {
+	if (o->mp.n) { /* The Go reference's map_problems field (omitempty): the problems of section 12, in order. */
 		bml_buf_adds(&b, ",\"map_problems\":[");
 		for (size_t i = 0; i < o->mp.n; i++) {
 			bml_buf_adds(&b, i ? ",{\"map\":" : "{\"map\":");
@@ -157,7 +159,7 @@ int pc_emit(struct out *o, const char *result, int code)
 		jstr(&b, o->probed_cap ? o->probed_cap : "");
 		bml_buf_adds(&b, "}");
 	}
-	if (o->has_load_as) {
+	if (o->has_load_as) { /* The privilege the load will run with, for a --caps check (recorded answers depend on privilege). */
 		bml_buf_addf(&b, ",\"load_as\":{\"uid\":%lld,\"cap_eff\":", o->load_uid);
 		jstr(&b, o->load_cap ? o->load_cap : "");
 		bml_buf_adds(&b, "}");
@@ -173,7 +175,7 @@ int pc_emit(struct out *o, const char *result, int code)
 		bml_buf_addf(&b, ",\"uprobe_reopens_path\":%s,\"core_poisons_missing_field\":%s,\"btf_rewrite\":",
 			     d->uprobe_reopens_path ? "true" : "false", d->core_poisons_missing_field ? "true" : "false");
 		jkv(&b, d->btf_rewrite, d->n_btf_rewrite, d->has_btf_rewrite);
-
+		/* The loader declaration, as the Go reference's LoaderJSONOf writes it: omitempty keys, in LoaderJSON's field order. */
 		const char *const lkeys[] = {"usdt_attach", "sockmap_attach", "lsm_cgroup_load", "fsession_load", "ksyscall_attach",
 			"hidden_data_vars", "typed_ksym", "kconfig", "arena_cast", "arena_premmap"};
 		const char *const lvals[] = {d->usdt_attach, d->sockmap_attach, d->lsm_cgroup_load, d->fsession_load, d->ksyscall_attach,

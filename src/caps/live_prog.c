@@ -1,3 +1,5 @@
+/* caps/live_prog.c — a C port of prog_type (features.HaveProgramType), helper (HaveProgramHelper), the tracing helper (kload's
+ * tracinghelper.go) and tcx (kload's HasTCX). */
 #define _GNU_SOURCE
 #include "util/gostr.h"
 #include "util/mutation.h"
@@ -16,7 +18,7 @@
 static const uint8_t insn_ret0[] = {0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 static const uint8_t insn_mov_ret[] = {0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 
-
+/* The BTF of the stage 1 and stage 2 programs of Extension (FUNC "a" global, then FUNC_PROTO (ctx: struct xdp_md *); 110 bytes) and the func_info */
 static const uint8_t ext_btf[] = {
 	0x9f, 0xeb, 0x01, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00,
 	0x0e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x0c, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -27,7 +29,7 @@ static const uint8_t ext_btf[] = {
 };
 static const uint8_t ext_func_info[] = {0, 0, 0, 0, 1, 0, 0, 0};
 
-
+/* answer state to BML_Q_* (kload's have: present is true, ErrNotSupported is false, anything else is an error) */
 static int have(int state, int *out, char **msg, const char *what)
 {
 	*out = state == LV_OK;
@@ -45,7 +47,7 @@ static int unknown(char **msg, const char *what)
 	return BML_Q_UNKNOWN;
 }
 
-
+/* The classification of probeProgram: success means present; EINVAL, E2BIG or ErrNotSupported in the chain means absent; anything else is an error (not remembered) */
 static int classify(const struct lv_res *r, int ok)
 {
 	if (ok)
@@ -72,13 +74,13 @@ static int probe_extension(struct bml_live *l)
 	p.func_info_cnt = 1;
 	int ok = lv_prog_load(l, &p, &r1) == 0;
 	lv_res_free(&r1);
-	if (!ok)
+	if (!ok) /* an error at stage 1 is kept as it is (it does not go through probeProgram, so EINVAL is an error too) */
 	{
-		l->prog_type_errno[BPF_PROG_TYPE_EXT] = !r1.notsup && (!r1.verifier || r1.n_lines == 0) ? r1.err : 0;
+		l->prog_type_errno[BPF_PROG_TYPE_EXT] = !r1.notsup && (!r1.verifier || r1.n_lines == 0) ? r1.err : 0; /* kept for the error sentence */
 		return r1.notsup ? LV_NOTSUP : -1;
 	}
-	
-
+	/* Stage 2: findTargetInProgram. If stage 1 has no BTF (a kernel without ext infos) the result is ErrNotSupported. Go reads the BTF
+	 * back and looks up "a" to get id 1; the C code uses the constant 1 (a failure while reading it back is not ported, a known limitation). */
 	int st;
 	if (lv_feat(l, LVF_EXT_INFOS) != LV_OK)
 		st = LV_NOTSUP;
@@ -88,7 +90,7 @@ static int probe_extension(struct bml_live *l)
 		p.attach_prog_fd = (uint32_t)r1.fd;
 		ok = lv_prog_load(l, &p, &r2) == 0;
 		st = classify(&r2, ok);
-		l->prog_type_errno[BPF_PROG_TYPE_EXT] = st < 0 && (!r2.verifier || r2.n_lines == 0) ? r2.err : 0;
+		l->prog_type_errno[BPF_PROG_TYPE_EXT] = st < 0 && (!r2.verifier || r2.n_lines == 0) ? r2.err : 0; /* kept for the error sentence */
 		lv_close(r2.fd);
 		lv_res_free(&r2);
 	}
@@ -131,12 +133,12 @@ static int probe_prog_type(struct bml_live *l, uint32_t pt)
 	int st = classify(&r, ok);
 	if (pt == BPF_PROG_TYPE_STRUCT_OPS && st < 0 && r.err == ENOTSUPP)
 		st = LV_OK;
-	l->prog_type_errno[pt] = st < 0 && (!r.verifier || r.n_lines == 0) ? r.err : 0;
+	l->prog_type_errno[pt] = st < 0 && (!r.verifier || r.n_lines == 0) ? r.err : 0; /* kept for the error sentence (cilium's form, for an error without a log) */
 	lv_res_free(&r);
 	return st;
 }
 
-
+/* HaveProgramType with a cache (the key is the low 32 bits of the id; 0 and values from 33 up are not in the table and are errors) */
 static int prog_type_state(struct bml_live *l, int64_t id)
 {
 	uint32_t pt = (uint32_t)id;
@@ -150,7 +152,7 @@ static int prog_type_state(struct bml_live *l, int64_t id)
 	return st;
 }
 
-
+/* The String of cilium v0.22's ebpf.ProgramType (0..32; checked by printing ebpf.ProgramType(i).String() with go run) */
 static const char *const pt_names[33] = {
 	"UnspecifiedProgram", "SocketFilter",  "Kprobe",        "SchedCLS",       "SchedACT",       "TracePoint",   "XDP",
 	"PerfEvent",     "CGroupSKB",     "CGroupSock",    "LWTIn",          "LWTOut",         "LWTXmit",      "SockOps",
@@ -162,7 +164,7 @@ static const char *const pt_names[33] = {
 int bml_live_prog_type(struct bml_live *l, int64_t id, int *out, char **msg)
 {
 	uint32_t pt = (uint32_t)id;
-	if ((pt == 0 || pt > 32) && !BML_MUT("live.nofeature_text_old")) {
+	if ((pt == 0 || pt > 32) && !BML_MUT("live.nofeature_text_old")) { /* cilium's haveProgramTypeMatrix has no key for it */
 		struct bml_buf b = {0};
 		if (pt == 0)
 			bml_buf_adds(&b, "no feature probe for UnspecifiedProgram");
@@ -174,8 +176,9 @@ int bml_live_prog_type(struct bml_live *l, int64_t id, int *out, char **msg)
 	}
 	int st = prog_type_state(l, id);
 	if (st != LV_OK && st != LV_NOTSUP && pt <= 32 && l->prog_type_errno[pt] && !BML_MUT("live.prog_type_text_old")) {
-		
-
+		/* cilium's FeatureTest says "detect support for %s: %w" (Name is the String of the ProgramType) and NewProgram says
+		 * "load program: %w" (the errno is spelled as Go spells it). A verifier error (one with a log) is not ported and keeps its earlier
+		 * sentence; if it became visible it would show up in the differential test. */
 		char *e = bml_go_errno_str(l->prog_type_errno[pt]);
 		struct bml_buf b = {0};
 		bml_buf_addf(&b, "detect support for %s: load program: %s", pt_names[pt], e ? e : "");
@@ -187,7 +190,7 @@ int bml_live_prog_type(struct bml_live *l, int64_t id, int *out, char **msg)
 	return have(st, out, msg, "prog type");
 }
 
-
+/* call <id>; ld_imm64 r0, 0; exit */
 static void helper_insns(uint8_t ins[32], uint32_t h)
 {
 	memset(ins, 0, 32);
@@ -197,7 +200,7 @@ static void helper_insns(uint8_t ins[32], uint32_t h)
 	ins[24] = 0x95;
 }
 
-
+/* whether line contains a and, unless tag is NULL, tag as well */
 static int has2(const char *line, const char *a, const char *tag)
 {
 	return strstr(line, a) && (!tag || strstr(line, tag));
@@ -214,7 +217,7 @@ static int helper_rejected(char **lines, size_t from, size_t n, const char *tag)
 
 static int probe_helper(struct bml_live *l, uint32_t pt, uint32_t h)
 {
-	if (h & 0x70000000u)
+	if (h & 0x70000000u) /* platform.DecodeConstant: a number from a non-Linux platform (ErrNotSupportedOnOS) */
 		return LV_NOTSUP;
 	uint8_t ins[32];
 	helper_insns(ins, h);
@@ -254,8 +257,7 @@ int bml_live_helper(struct bml_live *l, int64_t prog_type_id, int64_t helper_id,
 	uint32_t pt = (uint32_t)prog_type_id, h = (uint32_t)helper_id;
 	*out = 0;
 	if (pt == BPF_PROG_TYPE_TRACING || pt == BPF_PROG_TYPE_STRUCT_OPS || pt == BPF_PROG_TYPE_EXT || pt == BPF_PROG_TYPE_LSM) {
-		
-
+		/* kload: fmt.Errorf("cilium/ebpf has no helper probe for %v: %w", ebpf.ProgramType(id), ErrUnknown); %v is the String of cilium's ProgramType */
 		if (BML_MUT("live.helper_unknown_text_old"))
 			return unknown(msg, "cilium/ebpf has no helper probe for this program type");
 		const char *nm = pt == BPF_PROG_TYPE_TRACING ? "Tracing" : pt == BPF_PROG_TYPE_STRUCT_OPS ? "StructOps" : pt == BPF_PROG_TYPE_EXT ? "Extension" : "LSM";
@@ -279,9 +281,9 @@ int bml_live_helper(struct bml_live *l, int64_t prog_type_id, int64_t helper_id,
 	return have(st, out, msg, "helper");
 }
 
-
-
-
+/* kload's tracing helper (the memo remembers errors and Unknown alike) */
+/* kload's probeTracingHelper. The Unknown sentence matches Go byte for byte: `Tracing helper probe (<at>, <helper>): <reason>: cannot be
+ * determined on this target`. For Unknown, *why receives the reason sentence (malloc'd). */
 static int probe_tracing_helper(struct bml_live *l, const char *at, const char *helper, int64_t id, int *value, char **why)
 {
 	struct lv_prog p = {0};
@@ -296,7 +298,7 @@ static int probe_tracing_helper(struct bml_live *l, const char *at, const char *
 		p.attach_type = BPF_TRACE_RAW_TP;
 		p.attach_to = "btf_trace_sched_process_fork";
 		p.attach_kind = KBTF_TYPEDEF;
-	} else if (strcmp(at, "trace_iter") == 0) {
+	} else if (strcmp(at, "trace_iter") == 0) { /* cilium resolves AttachTo bpf_map_elem to FUNC bpf_iter_bpf_map_elem */
 		p.attach_type = BPF_TRACE_ITER;
 		p.attach_to = "bpf_iter_bpf_map_elem";
 		p.attach_kind = KBTF_FUNC;
@@ -312,7 +314,7 @@ static int probe_tracing_helper(struct bml_live *l, const char *at, const char *
 		return BML_Q_UNKNOWN;
 	}
 	uint32_t h = (uint32_t)id;
-	if (h & 0x70000000u) {
+	if (h & 0x70000000u) { /* a marshal error (cilium's asm: a constant of a non-Linux platform); it is not a VerifierError */
 		bml_buf_addf(&b, "Tracing helper probe (%s, %s): instruction 0: function BuiltinFunc(%d) (): not supported on linux: cannot be determined on this target",
 			     at, helper, (int32_t)h);
 		*why = bml_buf_take(&b);
@@ -348,7 +350,7 @@ static int probe_tracing_helper(struct bml_live *l, const char *at, const char *
 		for (size_t i = 0; i < r.n_lines; i++)
 			if (has2(r.lines[i], "supported only for", tag))
 				rc = BML_Q_OK;
-		if (rc == BML_Q_UNKNOWN) {
+		if (rc == BML_Q_UNKNOWN) { /* the helper line of the log (if there is none, the last line before the processed line), quoted with %q */
 			const char *last = "";
 			for (size_t i = 0; i < r.n_lines; i++)
 				if (strstr(r.lines[i], tag))
@@ -389,7 +391,7 @@ int bml_live_tracing_helper(struct bml_live *l, const char *attach_type, const c
 			*msg = strdup("out of memory");
 			return BML_Q_ERROR;
 		}
-		l->memo[l->n_memo - 1].msg = w;
+		l->memo[l->n_memo - 1].msg = w; /* Go's memo also remembers the answer and the error sentence (the key is the attach kind and id; the name is that of the first query) */
 		why = w;
 	}
 	*out = v;
@@ -419,7 +421,7 @@ int bml_live_tcx(struct bml_live *l, int *out, char **msg)
 	if (!BML_MUT("live.tcx_keep_prog"))
 		lv_close(r.fd);
 	if (rc >= 0) {
-		lv_close(rc);
+		lv_close(rc); /* kload does not close it (the answer is the same) */
 		return unknown(msg, "create a tcx link on ifindex ^0 succeeded unexpectedly");
 	}
 	if (rc == -ENODEV) {

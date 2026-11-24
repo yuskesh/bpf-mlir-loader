@@ -1,3 +1,6 @@
+/* req/check_v11.c — judgement version 9, checking the family of companion rows (a port of checkV11, v11GenericOf, checkLSMArgs,
+ * checkTPFields, SyscallsCtxProblem, checkExt and checkStructOps in bpf-mlir's go/requirements/companion_v11.go). A family type keeps the
+ * checks that the generic row of version 9 gives (attach_type and attach_target); freplace had no generic row before. */
 #include "req/check_internal.h"
 
 #include <stdio.h>
@@ -6,7 +9,7 @@
 
 #include "util/mutation.h"
 
-
+/* v11GenericOf + checkGenericAttach: asks the question with the family type rewritten into the shape of a generic row. */
 static int v11_generic(struct ck *c, const struct bml_attach *a)
 {
 	const char *at = NULL, *kind = NULL, *val = "";
@@ -40,7 +43,8 @@ static int v11_generic(struct ck *c, const struct bml_attach *a)
 	return rc;
 }
 
-
+/* checkLSMArgs: a struct argument is asked of func_args (`bpf_lsm_<hook>`), an integer argument of func_param (trace_lsm_cgroup does the same,
+ * see check_v13.c). */
 int ck_lsm_args(struct ck *c, const struct bml_attach *a)
 {
 	const char *P = a->program.p;
@@ -107,13 +111,14 @@ int ck_lsm_args(struct ck *c, const struct bml_attach *a)
 	return rc;
 }
 
-
+/* SyscallsCtxProblem: returns a malloc-ed message if a field of a syscalls event lies outside the BPF ctx layout (struct
+ * syscall_trace_enter / syscall_trace_exit), and NULL if it lies inside. */
 static char *syscalls_ctx_problem(const char *event, const struct bml_tpfield *t)
 {
 	if (BML_MUT("check.syscalls_ctx_skip") || strncmp(event, "syscalls/", 9) != 0)
 		return NULL;
 	const char *name = event + 9;
-	if (t->sign.p[0] == '[')
+	if (t->sign.p[0] == '[') /* arrays [N]u8 / [N]i8 (parse lets only the spellings accepted by validKFieldByteArray through) */
 		return ck_fmtd("field %s: inline array fields are not part of the BPF context of syscalls events", t->field.p);
 	int64_t off = t->offset, b = t->bytes;
 	if (off == 8 && b == 4)
@@ -128,7 +133,7 @@ static char *syscalls_ctx_problem(const char *event, const struct bml_tpfield *t
 		       t->field.p, (long long)off, (long long)b);
 }
 
-
+/* checkTPFields: asks tracepoint_fields once per tpfield row. */
 static int tp_fields(struct ck *c, const struct bml_attach *a)
 {
 	const char *P = a->program.p, *ev = a->target.p;
@@ -159,7 +164,7 @@ static int tp_fields(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* checkExt: the extret / extarg rows of freplace. */
 static int ext(struct ck *c, const struct bml_attach *a)
 {
 	const char *P = a->program.p, *T = a->target.p;
@@ -183,7 +188,7 @@ static int ext(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* checkStructOps: the structop row together with retsig / farg. */
 static int struct_ops(struct ck *c, const struct bml_attach *a)
 {
 	const char *P = a->program.p;

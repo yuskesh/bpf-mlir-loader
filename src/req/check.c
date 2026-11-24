@@ -1,3 +1,8 @@
+/* check.c — a port of Go's requirements.Check (requirements.go lines 862-1104 at v0.12.0), checkArchAndCtx, checkKprobeTarget,
+ * checkNullableArgs, checkMapFields and Unmet.String / BlocksLoad (starting at judgement version 3). The order of the branches, and for each
+ * query whether an unanswerable question becomes Unknown or a checking error, stay as in Go (the table in section 5 of the format document).
+ * The name and the text (String) of every Unmet are made byte-identical to bindrt's; that is a deliberate requirement, and the downstream
+ * tests verify it. */
 #include "req/check_internal.h"
 
 #include <stdarg.h>
@@ -14,10 +19,10 @@ static int check_body(struct ck *c)
 	const struct bml_caps *caps = c->caps;
 	if (ck_has_nul(r))
 		return ck_fail(c, ck_dupn("a requirements field contains a NUL byte, which bpf-mlir-loader does not check (strict — Go compares the bytes)"));
-
+	/* 0. Helpers that depend on a target: checked before the generic helper check. */
 	if (ck_check_helper_targets(c))
 		return -1;
-
+	/* 1. The program and its helpers. */
 	for (size_t i = 0; i < r->n_programs; i++) {
 		const struct bml_program *p = &r->programs[i];
 		int ok = 0;
@@ -48,21 +53,21 @@ static int check_body(struct ck *c)
 				ck_add(c, "helper", p->symbol.p, h->name.p, h->id, NULL);
 		}
 	}
-
+	/* 1.5 The prototype of a kfunc (judgement version 12, check_v13.c). */
 	if (r->n_kfuncs > 0 && ck_check_kfuncs(c))
 		return -1;
 	if (ck_check_enum_values(c) || ck_check_struct_sizes(c)) return -1;
-
+	/* 2. The attach rows. */
 	for (size_t i = 0; i < r->n_attaches; i++) {
 		const struct bml_attach *a = &r->attaches[i];
 		const char *P = a->program.p, *T = a->target.p, *AT = a->attach_type.p;
-		if (a->generic) {
-
+		if (a->generic) { /* format 9: the generic attach rows, in check_v9.c */
+			/* checkProgLoader (judgement version 12) and checkTPBuffer (judgement version 13) */
 			if (ck_check_generic_attach(c, a) || ck_check_prog_loader(c, a) || ck_check_tpbuf(c, a))
 				return -1;
 			continue;
 		}
-		if (!strcmp(AT, "trace_lsm_cgroup") || !strcmp(AT, "ksyscall")) {
+		if (!strcmp(AT, "trace_lsm_cgroup") || !strcmp(AT, "ksyscall")) { /* format 13, in check_v13.c */
 			if (ck_check_v13(c, a) || ck_check_prog_loader(c, a))
 				return -1;
 			continue;
@@ -86,12 +91,12 @@ static int check_body(struct ck *c)
 			continue;
 		}
 		if (!strcmp(AT, "netkit")) {
-			if (ck_check_netkit(c, a))
+			if (ck_check_netkit(c, a)) /* the netkit attach contract */
 				return -1;
 			continue;
 		}
 		if (!strcmp(AT, "kprobe_multi") || !strcmp(AT, "kretprobe_multi") || !strcmp(AT, "uprobe_multi") || !strcmp(AT, "uretprobe_multi")) {
-			if (ck_check_multi(c, a))
+			if (ck_check_multi(c, a)) /* format 12, in check_v12.c */
 				return -1;
 			continue;
 		}
@@ -100,12 +105,12 @@ static int check_body(struct ck *c)
 				return -1;
 			continue;
 		}
-		if (!strcmp(AT, "uprobe") || !strcmp(AT, "uretprobe")) {
+		if (!strcmp(AT, "uprobe") || !strcmp(AT, "uretprobe")) { /* uretprobe gets the same check (binary and symbol; it has no argument rows) */
 			if (ck_check_uprobe(c, a))
 				return -1;
 			continue;
 		}
-		if (!strcmp(AT, "kprobe") || !strcmp(AT, "kretprobe")) {
+		if (!strcmp(AT, "kprobe") || !strcmp(AT, "kretprobe")) { /* kretprobe gets the same check (including the loader's re-attach to another name) */
 			char *ta;
 			int rc = ck_check_arch_ctx(c, a, &ta);
 			if (rc == 0)
@@ -116,12 +121,12 @@ static int check_body(struct ck *c)
 			continue;
 		}
 		if (!strcmp(AT, "trace_lsm") || !strcmp(AT, "trace_tp") || !strcmp(AT, "trace_perf") || !strcmp(AT, "freplace") ||
-		    !strcmp(AT, "trace_struct_ops")) {
+		    !strcmp(AT, "trace_struct_ops")) { /* format 11, in check_v11.c */
 			if (ck_check_v11(c, a))
 				return -1;
 			continue;
 		}
-		if (!strcmp(AT, "trace_fmod_ret")) {
+		if (!strcmp(AT, "trace_fmod_ret")) { /* format 10, in check_v9.c */
 			if (ck_check_fmod_ret(c, a))
 				return -1;
 			continue;
@@ -153,9 +158,9 @@ static int check_body(struct ck *c)
 			ck_add_diffs(c, "attach", P, T, &d);
 			continue;
 		}
-		
-
-		if (a->sleepable && ck_check_sleepable(c, a))
+		/* Judgement version 5 (v0.17.0): the argument types of fentry, checked before CheckFunc of the same attach. Judgement version 15: an
+		 * integer farg is checked for width and signedness through func_param (check_v15.c). */
+		if (a->sleepable && ck_check_sleepable(c, a)) /* a false answer blocks the load, an Unknown one does not */
 			return -1;
 		if (a->n_fargs > 0 && ck_fentry_args(c, a) != 0)
 			return -1;
@@ -169,7 +174,7 @@ static int check_body(struct ck *c)
 			return ck_fail(c, msg);
 		ck_add_diffs(c, "attach", P, T, &d);
 	}
-
+	/* 3. The tracepoint (a query of its own, separate from kfields). */
 	int has_tp = HAS(c, tracepoint, BML_QUERY_TRACEPOINT);
 	for (size_t i = 0; i < r->n_attaches; i++) {
 		const struct bml_attach *a = &r->attaches[i];
@@ -187,9 +192,9 @@ static int check_body(struct ck *c)
 		if (ck_check_nullable(c, a))
 			return -1;
 	}
-
+	/* 4. The kfields (asked even when there are none, as in Go). */
 	if (ck_check_kfields_guarded(c)) return -1;
-
+	/* 5. The BTF features and the loader's rewriting of BTF (judgement version 3). */
 	if (HAS(c, btf_feature, BML_QUERY_BTF_FEATURE) && r->n_btf_features > 0) {
 		const struct bml_loader_decl *decl = ck_loader_of(c);
 		const char *rewrites[8], *undeclared[8];
@@ -250,7 +255,7 @@ static int check_body(struct ck *c)
 		for (size_t i = 0; i < r->n_btf_features; i++)
 			ck_add(c, "btf_feature_unknown", "", r->btf_features[i].p, 0, ck_dupn("this checker cannot probe the target BTF"));
 	}
-
+	/* 6. The argument tags. */
 	if (r->n_argtags > 0) {
 		int ok_q = HAS(c, arg_tag, BML_QUERY_ARG_TAG);
 		for (size_t i = 0; i < r->n_argtags; i++) {
@@ -275,13 +280,13 @@ static int check_body(struct ck *c)
 			free(name);
 		}
 	}
-
+	/* 6.5 Access to ctx fields (format 9, check_v9.c). */
 	if (r->n_ctxaccesses > 0 && ck_check_ctx_accesses(c))
 		return -1;
 	if (ck_check_fib_flags(c)) return -1;
 	ck_check_loader_rows(c);
 	if (ck_check_ksym_vars(c) || ck_check_kconfigs(c)) return -1;
-
+	/* 7. map type */
 	for (size_t i = 0; i < r->n_maps; i++) {
 		const struct bml_map *m = &r->maps[i];
 		int ok = 0;
@@ -291,9 +296,9 @@ static int check_body(struct ck *c)
 		if (!ok)
 			ck_add(c, "map_type", m->symbol.p, m->map_type.p, m->id, NULL);
 	}
-	if (ck_check_innermaps(c))
+	if (ck_check_innermaps(c)) /* 7.5 The inner template of a map-in-map (format 12). */
 		return -1;
-
+	/* 8. The map fields (a program without a program type is skipped). */
 	const struct bml_map_fields *mf = &r->map_fields;
 	if (mf->state != BML_MF_DERIVED) {
 		const char *why = mf->state == BML_MF_NOT_DERIVED

@@ -1,3 +1,6 @@
+/* elf/maps_symbols.c — bpf-mlir go/layout's MapSymbols (a build-time export): the names of the symbols defined in the
+ * first `.maps` section — not STT_SECTION, not empty, first occurrence kept, sorted by bytes (Go's sort.Strings). No `.maps`
+ * section is an empty list, whatever the ELF's class, byte order or type. */
 #include "elf/maps_symbols.h"
 
 #include <stdlib.h>
@@ -33,7 +36,7 @@ int bml_elf_maps_symbols(const struct bml_elf *elf, char ***out, size_t *n, char
 		return 0;
 	struct bml_elf_sym *syms = NULL;
 	size_t ns = 0;
-	if (bml_elf_symbols(elf, 2                 , &syms, &ns, err))
+	if (bml_elf_symbols(elf, 2 /* SHT_SYMTAB */, &syms, &ns, err))
 		return -1;
 	char **names = ns ? calloc(ns, sizeof *names) : NULL;
 	size_t k = 0;

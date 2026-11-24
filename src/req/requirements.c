@@ -1,3 +1,4 @@
+/* req/requirements.c — the tables of requirements (row kinds and BTF features) and releasing them; split out of req_parse.c. */
 #include "req/parse_internal.h"
 
 #include <stdarg.h>
@@ -13,23 +14,23 @@ const struct bml_row_kind bml_row_kinds[] = {
 	{"kfield", 5, 3},   {"attach", 4, 4},   {"arg", 4, 4},       {"retsig", 4, 4},
 	{"arch", 3, 4},     {"ctxfield", 6, 4}, {"kprobearg", 4, 4}, {"binary", 4, 4},
 	{"uprobearg", 4, 4}, {"btf", 2, 5},     {"argtag", 4, 6},    {"tailslot", 4, 7},
-	{"farg", 4, 8},
-	{"ctxaccess", 7, 9},
-	{"tpfield", 6, 11},  {"extret", 4, 11}, {"extarg", 4, 11}, {"structop", 4, 11},
-	{"mtarget", 4, 12},  {"usdtsem", 3, 12}, {"usdtarg", 4, 12}, {"innermap", 8, 12},
-	{"kfunc", 4, 13},    {"sysarg", 4, 13},  {"mtargetarg", 5, 13},
-	{"tpbuf", 3, 14},
+	{"farg", 4, 8}, /* since v0.17.0 */
+	{"ctxaccess", 7, 9}, /* format 9 */
+	{"tpfield", 6, 11},  {"extret", 4, 11}, {"extarg", 4, 11}, {"structop", 4, 11}, /* format 11 */
+	{"mtarget", 4, 12},  {"usdtsem", 3, 12}, {"usdtarg", 4, 12}, {"innermap", 8, 12}, /* format 12 */
+	{"kfunc", 4, 13},    {"sysarg", 4, 13},  {"mtargetarg", 5, 13}, /* format 13; a kfunc row has 4 to 9 fields (RowMaxFields) */
+	{"tpbuf", 3, 14}, /* format 14 */
 	{"enumval", 5, 20}, {"fibflags", 4, 21}, {"datakptr", 2, 23},
 	{"ksymvar", 5, 24}, {"kconfig", 4, 24}, {"guard", 4, 24},
 	{"coreenum", 4, 26}, {"funcret", 3, 27}, {"kstructsize", 3, 28}, {"arena", 2, 29},
-	{"helper_target", 8, 31}, {"sleepable", 2, 32},
+	{"helper_target", 8, 31}, {"sleepable", 2, 32}, /* formats 31 and 32 */
 };
 const size_t bml_n_row_kinds = sizeof(bml_row_kinds) / sizeof(bml_row_kinds[0]);
-
+/* The features for which BTFFeatureBlob (btfblob.go) carries a blob: type_tag, from format 13 on (see req_btf_feature_min_version). */
 static const char *const btf_features[] = {"int",  "ptr",        "const",       "array",    "struct", "func",
 					   "func_proto", "func_global", "decl_tag", "var",    "datasec", "type_tag", "enum", "enum64"};
 
-
+/* btfFeatureMinVersion: type_tag needs 13; the other features need the minimum version of the btf row (5). */
 int req_btf_feature_min_version(struct field f)
 {
 	return req_eq(f, "type_tag") ? 13 : (req_eq(f, "enum") || req_eq(f, "enum64")) ? 22 : 5;
@@ -124,20 +125,20 @@ void bml_requirements_free(struct bml_requirements *r)
 		free(a->ext_args);
 		freestr(&a->sop_struct);
 		freestr(&a->sop_member);
-		for (size_t j = 0; j < a->n_mtargets; j++)
+		for (size_t j = 0; j < a->n_mtargets; j++) /* format 12 */
 			freestr(&a->mtargets[j]);
 		free(a->mtargets);
 		freestr(&a->usdt_sem);
 		for (size_t j = 0; j < a->n_usdt_args; j++)
 			freestr(&a->usdt_args[j].type);
 		free(a->usdt_args);
-		for (size_t j = 0; j < a->n_sys_args; j++)
+		for (size_t j = 0; j < a->n_sys_args; j++) /* format 13 */
 			freestr(&a->sys_args[j].type);
 		free(a->sys_args);
 		for (size_t j = 0; j < a->n_mtarget_args; j++)
 			freestr(&a->mtarget_args[j].type);
 		free(a->mtarget_args);
-		freestr(&a->tpbuf_type);
+		freestr(&a->tpbuf_type); /* format 14 */
 	}
 	bml_req_kfunc_profiles_free(r);
 	free(r->attaches);

@@ -1,3 +1,6 @@
+/* util/gopath.c — copies of Go's path/filepath Clean, Join and Abs (Unix). They are used where the reference
+ * implementation (bpf-mlir's Go code) normalizes paths: the uprobe debug-file reader, the build-id debug path and the
+ * absolute form of ebpf-precheck's --debug argument. The recorded path bytes must match what Go produces. */
 #include "util/gopath.h"
 
 #include <stdlib.h>
@@ -62,7 +65,7 @@ char *bml_go_path_join(const char *const *elem, size_t n)
 	*p = 0;
 	for (size_t i = 0; i < n; i++) {
 		if (!elem[i][0])
-			continue;
+			continue; /* Join skips empty elements */
 		if (p != s)
 			*p++ = '/';
 		size_t k = strlen(elem[i]);
@@ -79,7 +82,8 @@ char *bml_go_path_join(const char *const *elem, size_t n)
 	return c;
 }
 
-
+/* os.Getwd: if $PWD is absolute and names the same device and inode as ".", use it (this keeps the symlink
+ * spelling of the directory); otherwise use getcwd. */
 static char *go_getwd(void)
 {
 	const char *pwd = getenv("PWD");

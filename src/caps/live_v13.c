@@ -1,3 +1,5 @@
+/* caps/live_v13.c — a C port of kload's CheckKfunc and CheckSyscallArg (kernel/internal/kload/v13.go). It reads the vmlinux BTF and
+ * tracefs's syscalls/sys_enter_<name>/format and loads no program. Mismatch and Unknown sentences follow Go's fmt formats byte for byte. */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 #include "btf/kernel_values.h"
@@ -13,7 +15,7 @@
 
 #define UNK ": cannot be determined on this target"
 
-
+/* intSpelling: Bool is bool, Signed or Char is i<bits>, anything else is u<bits> (Size is in bytes) */
 static void int_spelling(const struct bml_kbtf *kb, const struct kbtf_type *t, struct bml_buf *b)
 {
 	uint32_t enc = bml_kbtf_u32(kb, t->aux) >> 24 & 0xf;
@@ -23,7 +25,7 @@ static void int_spelling(const struct bml_kbtf *kb, const struct kbtf_type *t, s
 		bml_buf_addf(b, "%c%u", (enc & 1) || (enc & 2) ? 'i' : 'u', (uint32_t)(t->size_type * 8u));
 }
 
-
+/* KfuncSpelling (t is a type id; 0 is Void) */
 static void kfunc_spelling(const struct bml_kbtf *kb, uint32_t id, struct bml_buf *b)
 {
 	int cyc;
@@ -109,7 +111,7 @@ int bml_live_kfunc(struct bml_live *l, const char *name, const char *ret, const 
 		bml_buf_addf(&b, "kfunc %s has no FUNC_PROTO in the target BTF", name);
 		return lv_push(out, &b) ? lv_oom(out, msg) : BML_Q_OK;
 	}
-
+	/* CompareKfuncProto */
 	char *got = spell(kb, fp.size_type);
 	if (!got)
 		return lv_oom(out, msg);
@@ -156,7 +158,7 @@ int bml_live_kfunc(struct bml_live *l, const char *name, const char *ret, const 
 	return BML_Q_OK;
 }
 
-
+/* ---- syscall arguments ---- */
 
 struct sysfield {
 	char *type, *name;
@@ -174,7 +176,7 @@ static int is_space(char c)
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
 }
 
-
+/* the range [*s, *e) of strings.TrimSpace */
 static void trim(const char **s, const char **e)
 {
 	while (*s < *e && is_space(**s))
@@ -183,7 +185,7 @@ static void trim(const char **s, const char **e)
 		(*e)--;
 }
 
-
+/* ParseSyscallEnterFormat. Returns 0 if read and -1 on error (*err is malloc'd; NULL means out of memory). */
 static int parse_format(const char *text, struct sysfield **out, size_t *n, char **err)
 {
 	*out = NULL, *n = 0, *err = NULL;
@@ -199,7 +201,7 @@ static int parse_format(const char *text, struct sysfield **out, size_t *n, char
 		if (!de)
 			de = e;
 		trim(&ds, &de);
-		const char *i = NULL;
+		const char *i = NULL; /* LastIndexAny(decl, " *") */
 		for (const char *p = ds; p < de; p++)
 			if (*p == ' ' || *p == '*')
 				i = p;
@@ -248,7 +250,7 @@ fail:
 	return -1;
 }
 
-
+/* SyscallTypeSpelling: 1 with *s (malloc'd) means resolved, 0 means not resolved */
 static int type_spelling(const struct bml_kbtf *kb, const char *typ, char **s)
 {
 	*s = NULL;
@@ -323,7 +325,7 @@ static int type_spelling(const struct bml_kbtf *kb, const char *typ, char **s)
 	return ok;
 }
 
-
+/* compareSysarg */
 static int compare(const char *sc, int64_t n, const char *typ, char **args, char **names, size_t na, const char *from, struct bml_strs *out)
 {
 	struct bml_buf b = {0};
@@ -404,7 +406,7 @@ int bml_live_syscall_arg(struct bml_live *l, const char *name, int64_t n, const 
 		for (size_t i = 0; args && names && i < nf; i++) {
 			char *s;
 			int d;
-			if (lv_is_str(typ) && (int64_t)i == n - 1) {
+			if (lv_is_str(typ) && (int64_t)i == n - 1) { /* the last argument of strptr / strarray type */
 				if (!lv_sys_char_depth(kb, f[i].type, &d)) {
 					struct bml_buf b = {0};
 					bml_buf_addf(&b, "argument %lld (%s) of syscall %s has unresolved string pointer type ", (long long)n, f[i].name, name);
@@ -440,7 +442,7 @@ int bml_live_syscall_arg(struct bml_live *l, const char *name, int64_t n, const 
 		fields_free(f, nf);
 		return rc;
 	}
-
+	/* the BTF __do_sys_<name> */
 	char *fname = NULL, *err = NULL;
 	uint32_t id;
 	if (asprintf(&fname, "__do_sys_%s", name) >= 0 && bml_kbtf_by_name(kb, fname, KBTF_FUNC, &id, &err) == 0) {
@@ -456,7 +458,7 @@ int bml_live_syscall_arg(struct bml_live *l, const char *name, int64_t n, const 
 				bml_kbtf_param(kb, &fp, i, &pn, &pt);
 				int d;
 				char *s = NULL;
-				if (lv_is_str(typ) && (int64_t)i == n - 1) {
+				if (lv_is_str(typ) && (int64_t)i == n - 1) { /* the last argument of strptr / strarray type */
 					if (!lv_sys_btf_char_depth(kb, pt, &d)) {
 						unres = 1;
 						break;

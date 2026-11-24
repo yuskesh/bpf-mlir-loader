@@ -1,3 +1,9 @@
+/* run_own.h — the decision parts of the VM runners. The real syscalls are behind an ops table, so that the failure paths can
+ * be tried without root (see test/abi/own_ids_unit.c).
+ * - The links and programs the runner owns are identified by fixed IDs only. A disappearance is recognised only by an
+ *   ENOENT from an ID query; any other error means "not observed" and is never turned into an empty set.
+ * - The receive window lasts until a CLOCK_MONOTONIC deadline. Only a timeout (EAGAIN) and EINTR continue the loop; any
+ *   other read error is a failure. */
 #ifndef BML_TEST_RUN_OWN_H
 #define BML_TEST_RUN_OWN_H
 
@@ -15,8 +21,8 @@
 enum own_state { OWN_GONE, OWN_PRESENT, OWN_UNOBSERVED };
 
 struct own_sys {
-	int (*link_next)(uint32_t id, uint32_t *next);
-	int (*link_open)(uint32_t id);
+	int (*link_next)(uint32_t id, uint32_t *next); /* 0 or -errno (the end of the list is -ENOENT) */
+	int (*link_open)(uint32_t id);		       /* an fd or -errno */
 	int (*link_info)(int fd, struct bpf_link_info *out);
 	int (*prog_open)(uint32_t id);
 	int (*close_fd)(int fd);
@@ -32,7 +38,8 @@ static inline int own_close(const struct own_sys *s, int fd, char *err, size_t n
 	return c < 0 ? -1 : 0;
 }
 
-
+/* Collects the IDs of the netkit links that belong to the fixed program. A link of the same program but a different pair
+ * is an "unobserved" error. Returns 0, or -1 with the problem named in *err. */
 static inline int own_collect_links(const struct own_sys *s, uint32_t prog_id, uint32_t primary, uint32_t peer, uint32_t *ids, struct bpf_link_info *infos,
 				    int cap, int *n, char *err, size_t en)
 {
@@ -50,7 +57,7 @@ static inline int own_collect_links(const struct own_sys *s, uint32_t prog_id, u
 		id = next;
 		int fd = s->link_open(id);
 		if (fd == -ENOENT)
-			continue;
+			continue; /* a link that disappeared during the walk */
 		if (fd < 0) {
 			snprintf(err, en, "link_open %u: errno %d", id, -fd);
 			return -1;
@@ -80,7 +87,7 @@ static inline int own_collect_links(const struct own_sys *s, uint32_t prog_id, u
 	}
 }
 
-
+/* Whether the fixed ID disappears before the deadline. open is link_open or prog_open. */
 static inline enum own_state own_poll(const struct own_sys *s, int (*open_id)(uint32_t), uint32_t id, int ms, char *err, size_t en)
 {
 	int64_t end = s->now_ms() + ms;
@@ -100,12 +107,12 @@ static inline enum own_state own_poll(const struct own_sys *s, int (*open_id)(ui
 }
 
 struct window_ops {
-	ssize_t (*read)(void *ctx, uint8_t *b, size_t n, int *outgoing);
+	ssize_t (*read)(void *ctx, uint8_t *b, size_t n, int *outgoing); /* a byte count or -errno */
 	int64_t (*now_ms)(void);
 	void *ctx;
 };
 
-
+/* Reads until the deadline and counts matches. -1 is a read error (errno in *err). */
 static inline int window_count(const struct window_ops *w, int ms, int (*match)(const uint8_t *, ssize_t, void *), void *arg, int *err)
 {
 	int64_t end = w->now_ms() + ms;
@@ -126,20 +133,24 @@ static inline int window_count(const struct window_ops *w, int ms, int (*match)(
 	return got;
 }
 
-
+/* A known-false stop: the result is BML_TARGET_REJECTED (3) and there is exactly one Unmet, about the attach, the filter
+ * or the direction. Any other kind, or an input that cannot be read, is a failure of the procedure. */
 static inline int stop_is_expected(int64_t kind, int64_t n_unmet, const char *u_kind, const char *u_prog, const char *u_name, const char *direction)
 {
 	return kind == 3 && n_unmet == 1 && u_kind && u_prog && u_name && !strcmp(u_kind, "attach") && !strcmp(u_prog, "filter") && !strcmp(u_name, direction);
 }
 
-
+/* The result of one sendto. A send with PACKET_QDISC_BYPASS reports a netkit drop as ENOBUFS (observed on a real netkit device in a VM; the kernel 7.1.8 sources explain it: netkit's drop is NET_XMIT_DROP, which the QDISC_BYPASS path returns as ENOBUFS).
+ * In the stage where the drop is active, all 8 sends give -1 / ENOBUFS; in the other stages every byte is sent. */
 static inline int send_outcome_ok(ssize_t rc, int err, size_t want, int expect_drop)
 {
 	return expect_drop ? rc == -1 && err == ENOBUFS : rc == (ssize_t)want;
 }
 
-
-
+/* The order of the stages of the netkit arm (the wiring of STOP, which own_ids_unit tests without root). Each stage returns 0
+ * or a failure of the procedure; a mismatch of values is counted by the stage's check, and the run continues. Once a failure
+ * of the procedure or a failure to save is known, no later attach or phase is run, an attach that was already done is
+ * detached, and the object is always closed. The return value says whether the procedure failed. */
 enum arm_phase { ARM_NO_LINK, ARM_ATTACHED, ARM_REVERSE, ARM_AFTER };
 struct arm_steps {
 	void *ctx;
@@ -176,10 +187,10 @@ static inline int arm_sequence(const struct arm_steps *s)
 	return fault;
 }
 
-
+/* own_program_id.c (linked into the runners only). Returns 0, or -1 with the problem named in *err. */
 int own_program_id(int64_t obj, const char *prog, uint32_t *id, char *err, size_t en);
 
-
+/* ---- the real syscalls ---- */
 static inline int own_real_link_next(uint32_t id, uint32_t *next) { return bpf_link_get_next_id(id, next) < 0 ? -errno : 0; }
 static inline int own_real_link_open(uint32_t id) { int fd = bpf_link_get_fd_by_id(id); return fd < 0 ? -errno : fd; }
 static inline int own_real_prog_open(uint32_t id) { int fd = bpf_prog_get_fd_by_id(id); return fd < 0 ? -errno : fd; }
@@ -202,7 +213,7 @@ static inline void own_real_sleep_ms(int ms)
 }
 static const struct own_sys own_real = {own_real_link_next, own_real_link_open, own_real_link_info, own_real_prog_open, own_real_close, own_real_now_ms, own_real_sleep_ms};
 
-
+/* Turn a failure to save stdout into the result (never drop the raw output and report rc 0). */
 static int run_out_failed;
 static inline void run_flush(void)
 {

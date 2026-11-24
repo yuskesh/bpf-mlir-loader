@@ -1,3 +1,8 @@
+/* abi/netkit_finish.c — the check of a netkit link, and RTM_GETLINK.
+ * An attach request names the primary device, but the ifindex in the link's info is the device the
+ * link belongs to: a PRIMARY link belongs to the primary, a PEER link to the peer of the same pair
+ * (the kernel's netkit_link_fill_info; the Go reference does the same in checkNetkitInfo). Unlike tcx,
+ * the ifindex is not compared with the requested one. */
 #define _GNU_SOURCE
 #include "abi/netkit.h"
 
@@ -51,7 +56,8 @@ int abi_netkit_finish(const char *name, uint32_t want, uint32_t primary, uint32_
 		if (rc != 0) {
 			snprintf(why, sizeof why, "reading the link info: %s", abi_errno(-rc));
 		} else {
-
+			/* Mutation: the form where the kernel attached in the other direction. Either mutation alone
+ * introduces a mismatch (the keep one does not even close the link). */
 			if (BML_MUT("attach.netkit_info_forced_mismatch") || BML_MUT("attach.netkit_keep_on_mismatch"))
 				info.netkit.attach_type = want == BPF_NETKIT_PEER ? BPF_NETKIT_PRIMARY : BPF_NETKIT_PEER;
 			uint32_t expect = want == BPF_NETKIT_PEER && !BML_MUT("attach.netkit_peer_uses_primary") ? peer.ifindex : primary;

@@ -1,3 +1,5 @@
+/* A pure C port of the Go reference function bindrt.RejectedAt. cap counts the terminating NUL;
+ * if it is too small, no position is reported. */
 #ifndef BML_ABI_REJECTED_H
 #define BML_ABI_REJECTED_H
 #include <stddef.h>

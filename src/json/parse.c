@@ -1,3 +1,5 @@
+/* json/parse.c — syntax (arrays and objects with the key_case check, and values) and the entry points. Split out of
+ * json.c. */
 #include "json/internal.h"
 
 #include <stdarg.h>
@@ -41,8 +43,9 @@ static int parse_array(struct parser *p, struct bml_json *j, const struct bml_js
 	}
 }
 
-
-
+/* Fold only the characters that Go's strings.ToLower turns into ASCII (A-Z and U+212A KELVIN SIGN -> k). If there is
+ * a character that cannot be folded (one that does not become ASCII) the result is 0: field names of the types are
+ * ASCII, so such a key can never match. */
 static int fold_ascii(const char *k, size_t n, char *out, size_t cap)
 {
 	size_t o = 0;
@@ -95,7 +98,8 @@ static int parse_object(struct parser *p, struct bml_json *j, const struct bml_j
 			p->pos = kpos;
 			return json_fail(p, BML_JR_DUPLICATE_KEY, "duplicate key");
 		}
-
+		/* The type description: a struct gives the field names (a difference only in case is key_case, found in scan
+		 * order), a map gives the value type, anything else is a place whose type is unknown. */
 		const struct bml_json_desc *vt = NULL;
 		if (desc && desc->kind == BML_JD_STRUCT) {
 			int exact = 0;
@@ -120,7 +124,7 @@ static int parse_object(struct parser *p, struct bml_json *j, const struct bml_j
 		} else if (desc && desc->kind == BML_JD_MAP) {
 			vt = desc->child;
 		}
-		if (dup != (size_t)-1) {
+		if (dup != (size_t)-1) { /* lenient: the last one wins; drop the earlier value and reuse the same member */
 			free(key);
 			bml_json_free(j->members[dup].value);
 			j->members[dup].value = NULL;

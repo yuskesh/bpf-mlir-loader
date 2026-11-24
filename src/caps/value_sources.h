@@ -1,3 +1,4 @@
+/* The per-run snapshot owned by liveSources / kconfigOnce. For use inside caps/ only. */
 #ifndef BML_CAPS_VALUE_SOURCES_H
 #define BML_CAPS_VALUE_SOURCES_H
 

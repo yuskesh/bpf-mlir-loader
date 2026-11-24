@@ -1,3 +1,5 @@
+/* caps/live_misc.c — a C port of btf_feature (kload's HasBTFFeature and crossCheckCilium), arg_tag (argtag.go) and nullable_args
+ * (nullable.go). The blobs are the output of Go's requirements.BTFFeatureBlob and cilium's Builder.Marshal. */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -33,7 +35,7 @@ static const struct {
 	{"var", "9feb0100180000000000000020000000200000000700000001000000000000010400000020000001050000000000000e010000000100000000696e74007600"},
 	{"datasec", "9feb0100180000000000000038000000380000000d00000001000000000000010400000020000001050000000000000e0100000001000000070000000100000f0400000002000000000000000400000000696e740076002e6461746100"},
 	{"decl_tag", "9feb0100180000000000000040000000400000001400000001000000000000010400000020000001000000000100000d010000000500000001000000070000000100000c020000000900000000000011030000000000000000696e740061006600656270665f70726f626500"},
-
+	/* INT int, then TYPE_TAG ebpf_probe, then PTR (the bytes produced by running Go's BTFFeatureBlob("type_tag")) */
 	{"type_tag", "9feb010018000000000000002800000028000000100000000100000000000001040000002000000105000000000000120100000000000000000000020200000000696e7400656270665f70726f626500"},
 	{"enum", "9feb0100180000000000000024000000240000000900000001000000000000010400000020000001050000000100000604000000070000000000000000696e740065004500"},
 	{"enum64", "9feb010018000000000000002800000028000000090000000100000000000001040000002000000105000000010000130800000007000000000000000000000000696e740065004500"},
@@ -61,8 +63,8 @@ int bml_live_btf_feature(struct bml_live *l, const char *feature, int *out, char
 	} else if (!r.notsup && r.err == EINVAL)
 		has = 0;
 	else {
-		
-
+		/* kload.go's probeBTFFeature: if cilium's haveBTF re-check says not supported (EPERM included), the sentence is
+		 * `probe BTF <f>: BTF not supported (requires >= v4.18)` (UnsupportedFeatureError{"BTF", 4.18}). Anything else keeps the C summary. */
 		struct bml_buf b = {0};
 		if (r.notsup && !BML_MUT("live.attach_target_errno"))
 			bml_buf_addf(&b, "probe BTF %s: BTF not supported (requires >= v4.18)", feature);
@@ -71,7 +73,7 @@ int bml_live_btf_feature(struct bml_live *l, const char *feature, int *out, char
 		*msg = bml_buf_take(&b);
 		return BML_Q_ERROR;
 	}
-
+	/* crossCheckCilium: for a feature that cilium may rewrite, if "the kernel does not accept it" and "cilium rewrites it" disagree, the answer is Unknown */
 	struct lv_kmo o;
 	lv_kmo(l, &o);
 	int rw = -1;
@@ -91,7 +93,7 @@ int bml_live_btf_feature(struct bml_live *l, const char *feature, int *out, char
 	return BML_Q_OK;
 }
 
-
+/* The argtag probe: 9 instructions, 2 func_info entries and a BTF (U has no tag; T has a DECL_TAG arg:nonnull on argument 0 of f) */
 static const char argtag_insns[] = "b702000000000000" "7b2af8ff00000000" "bfa1000000000000" "07010000f8ffffff" "8510000002000000"
 				   "b700000002000000" "9500000000000000" "7910000000000000" "9500000000000000";
 static const uint8_t argtag_func_info[] = {0, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 2, 0, 0, 0};
@@ -105,7 +107,7 @@ static const char argtag_btf_t[] =
 	"000000000100000d030000001c000000070000001e000000000000110200000000000000006172677461675f70726f6265006600696e74006374780075"
 	"36340070006172673a6e6f6e6e756c6c00";
 
-
+/* An error is -1 (not a VerifierError, so Unknown), an acceptance is "accept", and a rejection is the log line (malloc'd) */
 static int load_line(struct bml_live *l, struct lv_prog *p, const char *pick, const char *tp, char **line, char **why)
 {
 	struct lv_res r;
@@ -139,7 +141,7 @@ static int load_line(struct bml_live *l, struct lv_prog *p, const char *pick, co
 			bml_buf_adds(&b, r.lines[i]);
 		}
 	lv_res_free(&r);
-
+	/* strings.TrimSpace (ASCII whitespace; the log is ASCII) */
 	char *s = bml_buf_take(&b);
 	if (!s)
 		s = strdup("");

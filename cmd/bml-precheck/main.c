@@ -1,3 +1,16 @@
+// cmd/bml-precheck/main.c — the entry point of the check that runs before a load. It takes the same arguments and
+// produces the same output and exit status as ebpf-precheck in section 11 of the requirements format specification
+// (docs/requirements_format.md of bpf-mlir).
+//
+//   bml-precheck (--loader=<preset> | --loader-file=<decl.json>) --caps=<caps.json>
+//                [--schema-sha256=<hex> [--hint=<text>]] (<object.bpf.o> | --requirements=<file holding the section contents>)
+//   bml-precheck --version
+//
+// Scope: --caps (a recorded caps file), --maps (section 12: the map declarations), --live and --binary (ask the
+// target kernel) and --record (write a caps file with a Recorder). Flags are parsed as Go's flag package does:
+// -x and --x are both accepted, a value is "=value" or the next argument, and parsing stops at the first argument
+// that is not a flag.
+
 #include "bml-precheck/precheck.h"
 
 #include <errno.h>
@@ -11,15 +24,15 @@
 #include "json/json.h"
 #include "req/from_elf.h"
 
-
+/* main's resources. Every return path frees them after main finishes, so that LeakSanitizer stays quiet. */
 static struct out o;
 static struct bml_loader_decl file_decl;
 static struct bml_recorded *rec;
 static struct bml_requirements *req;
-static char *elf_data;
+static char *elf_data; /* The bytes of the ELF (the records check reads the BTF from them); NULL with --requirements */
 static size_t elf_len;
 static struct bml_live_caps live;
-static struct bml_caps under;
+static struct bml_caps under; /* The caps that --record records the answers of */
 static struct bml_recorder *recorder;
 
 static int run(int argc, char **argv)
@@ -32,7 +45,7 @@ static int run(int argc, char **argv)
 		bml_buf_free(&ferr);
 		return rc;
 	}
-
+	/* As the Go reference does, report a bad debug flag right after the flags are parsed, before --version is handled. */
 	if ((f.debug_root_set || f.n_debug) && (!f.live || f.caps))
 		return pc_usage(&o, "--debug / --debug-root are for --live alone (a record names its debug files)");
 	if (f.version)
@@ -66,7 +79,8 @@ static int run(int argc, char **argv)
 	}
 	o.loader = decl;
 
-
+	/* The privilege the load will run with, for a --caps check: by default this process's own, or the one given by
+	 * --load-as (which is valid with --caps only). */
 	long long luid;
 	char *lcap = NULL;
 	pc_run_as(&luid, &lcap);
@@ -112,12 +126,12 @@ static int run(int argc, char **argv)
 			free(le);
 			return rc;
 		}
-		o.has_probed_as = 1;
+		o.has_probed_as = 1; /* Go: out.ProbedAs = &out.RunAs */
 		pc_run_as(&o.probed_uid, &o.probed_cap);
 	} else {
 		if (f.n_binary)
 			return pc_usage(&o, "--binary is for --live (a record names its binaries)");
-		if (f.n_ext_target)
+		if (f.n_ext_target) /* a recorded caps file does not carry replacement targets */
 			return pc_usage(&o, "--ext-target is for --live (a record does not carry replacement targets)");
 		rec = bml_recorded_read(f.caps, &e);
 		if (!rec) {
@@ -141,6 +155,9 @@ static int run(int argc, char **argv)
 	}
 	if (f.caps && bml_recorded_probed_as(rec, &o.probed_uid, &o.probed_cap))
 		o.has_probed_as = 1;
+	/* The Go reference's ForLoad. Some recorded answers depend on the privilege they were probed with. With
+	 * --caps --live those questions are probed again by this process's live caps; with --caps alone they are
+	 * Unknown. */
 	if (f.caps) {
 		const struct bml_caps *rp = NULL;
 		if (f.live) {
@@ -157,7 +174,7 @@ static int run(int argc, char **argv)
 			return pc_usage(&o, "out of memory");
 		o.has_load_as = 1;
 	}
-	if (f.record) {
+	if (f.record) { /* As in Go, rec = NewRecorder(caps); the --binary paths go into the record */
 		under = caps;
 		recorder = bml_recorder_new(&under);
 		if (!recorder)
@@ -173,7 +190,7 @@ static int run(int argc, char **argv)
 		bml_recorder_caps(recorder, &caps);
 	}
 
-
+	/* parse */
 
 	size_t len;
 	char *data;
@@ -220,7 +237,7 @@ static int run(int argc, char **argv)
 	} else {
 		return pc_usage(&o, "give one object file or --requirements");
 	}
-	if (!f.requirements) {
+	if (!f.requirements) { /* Keep the ELF for the records check, which reads its BTF; it is freed after main */
 		elf_data = data;
 		elf_len = len;
 	} else {
@@ -239,7 +256,7 @@ static int run(int argc, char **argv)
 		bml_buf_adds(&o.err, f.hint);
 		return pc_emit(&o, "schema_mismatch", EXIT_SCHEMA);
 	}
-
+	/* The map declarations (section 12), in the Go reference's order: parse, then schema, then maps, then check. */
 	if (f.maps) {
 		size_t ml;
 		char *me = NULL;
@@ -265,7 +282,7 @@ static int run(int argc, char **argv)
 		bml_map_decls_free(&md);
 		if (mrc < 0)
 			return pc_usage(&o, "out of memory");
-		if (mrc > 0) {
+		if (mrc > 0) { /* The message of Go's MapDeclError.Error() */
 			o.has_err = 1;
 			bml_buf_adds(&o.err, "the map declarations differ from the ELF (regenerate the bindings from the same schema):");
 			for (size_t i = 0; i < o.mp.n; i++) {
@@ -280,9 +297,11 @@ static int run(int argc, char **argv)
 
 	char *cerr = NULL;
 	int crc = bml_check(req, &caps, &o.unmet, &cerr);
-	if (recorder) {
+	if (recorder) { /* Write the record whether or not the check failed, as the Go reference does */
 		long long uid;
 		char *cap = NULL;
+		/* Re-recording a --caps file stores answers for the load's privilege: recorded answers that were probed with
+		 * the same privilege, re-probed answers, or Unknown. */
 		if (o.has_load_as) {
 			uid = o.load_uid;
 			cap = strdup(o.load_cap ? o.load_cap : "");

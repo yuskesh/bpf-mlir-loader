@@ -1,3 +1,5 @@
+/* Select the arena declaration shape without opening map_extra for other map kinds.
+ * The original descriptor still owns the lexical JSON checks. Validation preserves document order. */
 #include "maps/internal.h"
 
 #include <stdlib.h>
@@ -9,7 +11,7 @@ int md_json_is_arena(const struct bml_json *j)
 	if (!j || j->type != BML_JSON_OBJECT) return 0;
 	for (size_t i = 0; i < j->n; i++) {
 		const struct bml_json_member *m = &j->members[i];
-
+		/* encoding/json's only non-ASCII fold for these four letters is Kelvin K. Last wins. */
 		if ((m->key_len == 4 && !memcmp(m->key, "kind", 4)) ||
 		    (m->key_len == 6 && !memcmp(m->key, "\xe2\x84\xaaind", 6))) kind = m->value;
 	}

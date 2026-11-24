@@ -1,3 +1,15 @@
+/* abi/ksyscall.c — the ksyscall attach (a port of the Go reference livecaps.AttachKsyscall). A program
+ * with the attach row `ksyscall <syscall>` is attached with a kprobe at the entry of the syscall
+ * wrapper `<prefix>sys_<syscall>`. The prefix is looked up by the kernel's machine (from uname, not the
+ * process's architecture) in the same table as the Go requirements.SyscallPrefixes; a machine that is not
+ * in the table is an error before anything is attached (the program is never attached to the bare
+ * name). After attaching, the name of the kprobe function in the perf link's info is compared with
+ * the wrapper; if it differs or cannot be read, the link is detached and an error is returned, so a
+ * re-attachment to an alias by libbpf or cilium is not accepted.
+ * The loader declaration used by the C ABI check is cilium-v0.22-usdt-ksyscall (ksyscall_attach
+ * prefix). A ksyscall ELF in the product's checked load reaches this code too. (The earlier declaration,
+ * cilium-v0.22-usdt, has ksyscall_attach none; such an ELF reached here only through the test entry
+ * that loads without the check.) */
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,7 +25,7 @@ static int str_is(const struct bml_str *s, const char *lit)
 	return s->len == strlen(lit) && memcmp(s->p, lit, s->len) == 0;
 }
 
-
+/* The Go requirements.SyscallPrefixes (a subset of libbpf's arch_specific_syscall_pfx; only x86_64 for now). */
 static const char *syscall_prefix(const char *machine)
 {
 	return !strcmp(machine, "x86_64") ? "__x64_" : NULL;
@@ -46,7 +58,8 @@ static int64_t attach_ksyscall_body(int64_t obj, const char *prog, int64_t len)
 				machine, a->target.p);
 	char want[256];
 	snprintf(want, sizeof want, "%ssys_%s", pfx, a->target.p);
-
+	/* Mutation: the form that attached to another function (the comparison sees it).
+ * ksys.target_other_unconfirmed also removes the comparison (a hook carries only one name). */
 	int unconfirmed = BML_MUT("ksys.target_other_unconfirmed");
 	const char *at = BML_MUT("ksys.target_other") || unconfirmed ? "__x64_sys_getpid" : want;
 	LIBBPF_OPTS(bpf_kprobe_opts, ko, .retprobe = false);

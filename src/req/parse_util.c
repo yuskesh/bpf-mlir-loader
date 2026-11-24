@@ -1,3 +1,4 @@
+/* req/parse_util.c — parts of Parse: comparison, spelling, construction, error texts, line scanning and split; split out of req_parse.c. */
 #include "req/parse_internal.h"
 
 #include <stdarg.h>
@@ -7,13 +8,13 @@
 
 #include "util/mutation.h"
 
-
+/* The attach types that have companion rows (Go's AttachTypes). From format 9 kretprobe and uretprobe belong to the kprobe and uprobe families. */
 static const char *const attach_types[] = {"trace_raw_tp", "trace_fentry", "trace_fexit", "kprobe", "uprobe", "tcx", "kretprobe", "uretprobe",
-					   "trace_fmod_ret"                                      ,
-					   "trace_lsm", "trace_tp", "trace_perf", "freplace", "trace_struct_ops"                                      ,
-					   "kprobe_multi", "kretprobe_multi", "uprobe_multi", "uretprobe_multi", "usdt"                                      ,
-					   "trace_lsm_cgroup", "ksyscall"                                      ,
-					   "netkit"                                      };
+					   "trace_fmod_ret" /* format 10 */,
+					   "trace_lsm", "trace_tp", "trace_perf", "freplace", "trace_struct_ops" /* format 11 */,
+					   "kprobe_multi", "kretprobe_multi", "uprobe_multi", "uretprobe_multi", "usdt" /* format 12 */,
+					   "trace_lsm_cgroup", "ksyscall" /* format 13 */,
+					   "netkit" /* format 30 */};
 
 int req_eq(struct field f, const char *lit)
 {
@@ -56,8 +57,8 @@ int req_valid_int_spelling(struct field f)
 	return 0;
 }
 
-
-
+/* kfield types (since bpf-mlir v0.17.0; Go's kfieldTypes, ptr:<T> and validKFieldByteArray): i8 … u64, `ptr:` followed by at least 1 byte, and
+ * `[N]i8` / `[N]u8` (N is a canonical decimal in 1..64, spelled as strconv.Itoa(n) spells it: no sign and no leading 0). */
 int req_enum_bits(struct field f)
 {
 	return req_eq(f, "enum:8") ? 8 : req_eq(f, "enum:16") ? 16 : req_eq(f, "enum:32") ? 32 : req_eq(f, "enum:64") ? 64 : 0;
@@ -83,7 +84,7 @@ int req_kfield_type_ok(struct field f)
 	}
 	return v >= 1 && v <= 64;
 }
-
+/* ---- construction (running out of memory gives -1; the caller turns it into an untyped error) ---- */
 
 int req_mkstr(struct bml_str *s, struct field f)
 {
@@ -113,9 +114,9 @@ int req_grow_array(void **arr, size_t *cap, size_t elem, size_t need)
 	return 0;
 }
 
+/* ---- errors ---- */
 
-
-
+/* Building a message: in fmt, %s takes a C string, %q takes (ptr, len) and writes a Go quote, %d takes an int64 and %u a uint64. */
 static void vmsg(struct bml_buf *b, const char *fmt, va_list ap)
 {
 	for (const char *c = fmt; *c; c++) {
@@ -164,7 +165,7 @@ int req_perr(struct bml_parse_error *e, int line, const char *row, const char *r
 }
 
 
-
+/* ---- line scanning (bufio.Scanner with ScanLines) ---- */
 
 int req_scan(struct scanner *s)
 {
@@ -190,7 +191,7 @@ int req_scan(struct scanner *s)
 	s->tok.n = n;
 	return 1;
 }
-
+/* strings.Split(line, "\t"): keeps at most 8 fields, but counts all of them */
 int req_field_cmp(struct field a, struct field b)
 {
 	int c = memcmp(a.p, b.p, a.n < b.n ? a.n : b.n);

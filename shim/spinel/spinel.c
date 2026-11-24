@@ -1,3 +1,6 @@
+/* shim/spinel/spinel.c — the spinelbpf_* operations (see the notes in spinelbpf.h). The order of the checks and their
+ * messages match spinel's loader/main.go and internal/loader/loader.go (in the spinel-bpf-mlir sources at commit 5ce7602), but only
+ * where the shim does a check itself; everything else is passed on to bml_*. */
 #define _GNU_SOURCE
 #include "shim/spinel/internal.h"
 
@@ -17,7 +20,7 @@ static int key32_bad(int64_t k)
 	return k < 0 || k > 0xffffffffLL;
 }
 
-
+/* Turns an array of int64 (one byte per element) into bytes. A value outside 0..255 gives -1 and *bad (its position). */
 static uint8_t *to_bytes(const int64_t *a, int64_t n, int64_t *bad)
 {
 	*bad = -1;
@@ -42,7 +45,7 @@ static void from_bytes(int64_t *out, const uint8_t *b, int64_t n)
 		out[i] = b[i];
 }
 
-
+/* Reads a map declaration (spinel's ParseMapDecl). A failure is an OTHER result; success returns 0. */
 int64_t sh_parse_decl(const char *decl, struct bml_map_decl *d)
 {
 	char *err = NULL;
@@ -85,7 +88,7 @@ int64_t spinelbpf_map_put(int64_t obj, char *decl, int64_t key, int64_t value)
 	return bml_map_put_int(obj, S(decl), key, value);
 }
 
-
+/* Accepts record maps only (the first check of spinel's recordRow) */
 static int64_t record_only(const struct bml_map_decl *d)
 {
 	if (!strncmp(d->value, "record:", 7))
@@ -148,7 +151,7 @@ int64_t spinelbpf_map_put_bytes(int64_t obj, char *decl, int64_t key, int64_t *b
 	return r;
 }
 
-
+/* spinel's hashBytes (what is "key" or "value") */
 uint8_t *sh_hash_bytes(const int64_t *a, int64_t n, const char *what, int64_t *err)
 {
 	*err = 0;
@@ -180,7 +183,7 @@ int64_t spinelbpf_hash_get(int64_t obj, char *decl, int64_t *key, int64_t klen, 
 	}
 	uint8_t *v = malloc((size_t)vlen);
 	int64_t r = v ? bml_hash_get(obj, S(decl), NULL, 0, NULL, 0, k, klen, v, vlen) : sh_result(BML_OTHER, 0, "spinelbpf: out of memory");
-	if (v && bml_result_kind(r) == BML_OK) {
+	if (v && bml_result_kind(r) == BML_OK) { /* in spinel, the value is the size of the value */
 		from_bytes(val, v, vlen);
 		bml_result_free(r);
 		r = sh_result(BML_OK, vlen, "%s", "");
@@ -204,7 +207,7 @@ int64_t spinelbpf_hash_put(int64_t obj, char *decl, int64_t *key, int64_t klen, 
 		r = bml_hash_put(obj, S(decl), NULL, 0, NULL, 0, k, klen, v, vlen);
 		if (bml_result_kind(r) == BML_OTHER) {
 			struct sh_res x = sh_take(r);
-			if (x.msg && strstr(x.msg, "argument list too long"))
+			if (x.msg && strstr(x.msg, "argument list too long")) /* The map is full: this is spinel's message, and the test matches the E2BIG phrase in it. */
 				r = sh_result(BML_OTHER, 0, "spinelbpf: update %s: E2BIG — map is full (%llu entries): %s", d.name, (unsigned long long)d.max_entries,
 					      x.msg);
 			else
@@ -224,14 +227,14 @@ int64_t spinelbpf_hash_delete(int64_t obj, char *decl, int64_t *key, int64_t kle
 	int64_t e = sh_parse_decl(decl, &d);
 	if (e)
 		return e;
-	int percpu = !strcmp(d.kind, "percpu_hash");
+	int percpu = !strcmp(d.kind, "percpu_hash"); /* as in spinel: hash_delete accepts percpu_hash too */
 	bml_map_decl_free(&d);
 	uint8_t *k = sh_hash_bytes(key, klen, "key", &e);
 	if (!k)
 		return e;
 	int64_t r = percpu ? bml_percpu_delete(obj, S(decl), NULL, 0, k, klen) : bml_hash_delete(obj, S(decl), NULL, 0, k, klen);
 	free(k);
-	if (bml_result_kind(r) == BML_NOT_FOUND) {
+	if (bml_result_kind(r) == BML_NOT_FOUND) { /* spinel treats a key that is not there as OK / 0 */
 		bml_result_free(r);
 		return sh_result(BML_OK, 0, "%s", "");
 	}
@@ -249,12 +252,13 @@ int64_t spinelbpf_hash_keys(int64_t obj, char *decl, int64_t klen, int64_t *out,
 		return sh_result(BML_OTHER, 0, "spinelbpf: key size %lld × capacity %lld is outside the accepted range (at most 2^26 bytes)", (long long)klen,
 				 (long long)capacity);
 	}
-
+	/* The value size comes from the map in the ELF (the iterator reads the value too). A map that is not there gets vlen 0,
+	 * and the resulting check error is left for bml to report. */
 	int64_t vlen = 0, dr = bml_map_describe(obj, S(d.name));
 	if (bml_result_kind(dr) == BML_OK)
 		vlen = bml_result_value(dr);
 	bml_result_free(dr);
-
+	/* As in spinel, hash_keys accepts percpu_hash too. The iterator's value is (number of possible CPUs) x size; it is read and discarded. */
 	int percpu = !strcmp(d.kind, "percpu_hash");
 	int64_t r = percpu ? bml_percpu_iter_open(obj, S(decl), NULL, 0, NULL, 0, klen, vlen) : bml_hash_iter_open(obj, S(decl), NULL, 0, NULL, 0, klen, vlen);
 	if (percpu && bml_result_kind(r) == BML_OK) {
@@ -340,7 +344,7 @@ int64_t spinelbpf_ringbuf_read(int64_t rb, int64_t timeoutMs, int64_t *buf, int6
 		return sh_result(BML_OTHER, 0, "spinelbpf: ring buffer read with size %lld and timeout %lld ms is outside the accepted range", (long long)n,
 				 (long long)timeoutMs);
 	int64_t size = sh_reader_size(rb);
-	if (size < 0)
+	if (size < 0) /* an unknown reader: return bml's STATE */
 		return bml_ringbuf_read(rb, 0, NULL, 0);
 	uint8_t *b = malloc(size > 0 ? (size_t)size : 1);
 	if (!b)
@@ -348,7 +352,7 @@ int64_t spinelbpf_ringbuf_read(int64_t rb, int64_t timeoutMs, int64_t *buf, int6
 	int64_t r = bml_ringbuf_read(rb, timeoutMs, b, size);
 	if (bml_result_kind(r) == BML_OK && bml_result_value(r) == 1) {
 		bml_result_free(r);
-		if (n != size)
+		if (n != size) /* spinel reads the event before comparing the size, so the event is consumed */
 			r = sh_result(BML_MAP_MISMATCH, 0, "spinelbpf: the ring buffer event is %lld bytes but the caller's record layout is %lld — rebuild with spinelbpf build",
 				      (long long)size, (long long)n);
 		else {
@@ -381,7 +385,7 @@ int64_t spinelbpf_test_run_xdp_packet(int64_t obj, char *prog, int64_t *bytes, i
 	if (!b) {
 		if (bad < 0)
 			return sh_result(BML_OTHER, 0, "spinelbpf: out of memory");
-		int64_t u = bml_object_unmet(obj);
+		int64_t u = bml_object_unmet(obj); /* spinel looks at the object first */
 		if (bml_result_kind(u) != BML_OK)
 			return u;
 		bml_result_free(u);

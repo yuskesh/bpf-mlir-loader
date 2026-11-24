@@ -1,8 +1,16 @@
+/* req/parse_v12.c — the rows of format version 12 (a port of checkV12Pending, parseV12Companion and parseInnerMap in bpf-mlir's
+ * go/requirements/companion_v12.go). Row order per program kind (a star means zero or more rows):
+ *   kprobe_multi:     arch, ctxfield*, mtarget x N, kprobearg*
+ *   kretprobe_multi:  arch, ctxfield*, mtarget x N
+ *   uprobe_multi:     arch, ctxfield*, binary, mtarget x N, uprobearg*
+ *   uretprobe_multi:  arch, ctxfield*, binary, mtarget x N
+ *   usdt:             arch, ctxfield*, binary, usdtsem (0 or 1), usdtarg* (n ascending, 1..12)
+ * An innermap row must directly follow the map row of an array_of_maps / hash_of_maps map (required from version 12 on). */
 #include "req/parse_internal.h"
 
 #include <string.h>
 
-#define USDT_MAX_ARGS 12
+#define USDT_MAX_ARGS 12 /* Go's USDTMaxArgs */
 
 int req_uprobe_family(const struct bml_str *t)
 {
@@ -26,8 +34,9 @@ static int of_maps_str(const struct bml_str *t)
 	return req_str_eq_lit(t, "array_of_maps") || req_str_eq_lit(t, "hash_of_maps");
 }
 
-
-
+/* checkV12Pending: before row `row` (line number n; 0 means the end of the document), checks for missing mtarget rows of a multi program and
+ * for a missing innermap row of an of_maps map. after_map is the index into r->maps if the previous row was a map row, otherwise -1.
+ * Returns 0 for good and -1 for an error (stored in e). */
 int req_v12_pending(const struct bml_requirements *r, int n, const char *row, long after_map, struct bml_parse_error *e)
 {
 	const struct bml_attach *a = r->n_attaches ? &r->attaches[r->n_attaches - 1] : NULL;
@@ -55,7 +64,7 @@ int req_v12_pending(const struct bml_requirements *r, int n, const char *row, lo
 	return 0;
 }
 
-
+/* validSymbolName: non-empty, and every byte is greater than 0x20 and smaller than 0x7f. */
 static int valid_symbol_name(struct field s)
 {
 	if (s.n == 0)
@@ -66,7 +75,7 @@ static int valid_symbol_name(struct field s)
 	return 1;
 }
 
-
+/* parseV12Companion (mtarget, usdtsem, usdtarg). Returns 0 when the row was read, -1 for an error and -2 when memory runs out. */
 int req_v12_companion(struct bml_requirements *r, struct field *f, struct field line, int n, struct bml_parse_error *e)
 {
 	const char *row = req_eq(f[0], "mtarget") ? "mtarget" : req_eq(f[0], "usdtsem") ? "usdtsem" : "usdtarg";
@@ -100,7 +109,7 @@ int req_v12_companion(struct bml_requirements *r, struct field *f, struct field 
 			return BAD();
 		return req_mkstr(&a->usdt_sem, f[2]) ? -2 : 0;
 	}
-
+	/* usdtarg */
 	if (!req_str_eq_lit(&a->attach_type, "usdt") || a->usdt_sem.len == 0)
 		return OUT_OF_ORDER();
 	int64_t na;
@@ -119,13 +128,14 @@ int req_v12_companion(struct bml_requirements *r, struct field *f, struct field 
 #undef BAD
 }
 
-
+/* parseInnerMap: the previous map row (after_map, an index or -1) must be an array_of_maps / hash_of_maps map with the same name.
+ * The return values 0 / -1 / -2 are as above. */
 int req_v12_innermap(struct bml_requirements *r, struct field *f, struct field line, int n, long after_map, struct bml_parse_error *e)
 {
 	const struct bml_map *outer = NULL;
 	if (after_map >= 0) {
 		const struct bml_str *sym = &r->maps[after_map].symbol;
-		for (size_t i = 0; i < r->n_maps; i++)
+		for (size_t i = 0; i < r->n_maps; i++) /* as in Go: the last map of that name */
 			if (r->maps[i].symbol.len == sym->len && !memcmp(r->maps[i].symbol.p, sym->p, sym->len))
 				outer = &r->maps[i];
 	}

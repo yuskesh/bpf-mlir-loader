@@ -1,3 +1,5 @@
+/* json/validate.c — the checks made when reading into a type (unknown_key and type, in document order). Split out of
+ * json.c. */
 #include "json/internal.h"
 
 #include <stdarg.h>
@@ -6,7 +8,8 @@
 #include <string.h>
 
 
-
+/* The case folding that encoding/json applies to field names: ASCII case, U+017F (ſ) -> s, U+212A (K) -> k. A
+ * character that does not fold to ASCII gives 0. */
 static int fold_field(const char *k, size_t n, char *out, size_t cap)
 {
 	size_t o = 0;
@@ -96,7 +99,7 @@ int bml_json_validate(struct bml_json *j, const struct bml_json_desc *d, char **
 				for (size_t k = 0; k < d->n_fields && !f; k++)
 					if (!strcmp(d->fields[k].name, low))
 						f = &d->fields[k];
-				if (f) {
+				if (f) { /* matched after folding: rewrite the key to the field's name (Go reads the value into that field) */
 					char *nk = strdup(f->name);
 					if (!nk)
 						return vfail(err, rule, BML_JR_OOM, "out of memory%s", NULL);

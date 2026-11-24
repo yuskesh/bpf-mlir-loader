@@ -1,3 +1,4 @@
+/* Single-arena reservation -> libbpf-owned mapping transaction. */
 #include "load/internal.h"
 #include "load/arena.h"
 #include "load/arena_reserve.h"
@@ -74,7 +75,7 @@ int lb_arena_check(struct bml_obj *o, struct bml_load_result *r)
 void lb_arena_cleanup(struct bml_obj *o)
 {
 	if(!o->arena) return;
-
+	/* Called after libbpf close. Only an unconsumed reservation remains ours. */
 	char *err=NULL;
 	lb_arena_release(&o->arena->reservation,&err);
 	free(err); free(o->arena); o->arena=NULL;

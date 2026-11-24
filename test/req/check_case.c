@@ -1,3 +1,8 @@
+// test/corpus/check_case.c — runs a case of the conformance corpus (cases/<name>/: caps.json plus object.bpf.o or
+// requirements.txt) through the C check, and prints JSON in the same form as want.json (the Go reference's runCase in
+// go/bindrt/conformance_test.go: kind, program, name, id and blocks_load).
+//
+//   check_case <case dir>        rc: 0 means a verdict was printed, 2 means the case could not be run (a failure in the Go harness too)
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +50,8 @@ int main(int argc, char **argv)
 	}
 	struct bml_caps caps;
 	bml_recorded_caps(rc, &caps);
-
+	/* If load_as.json (the privilege the load will run with) exists, use the Go reference's ForLoad. If reprobe.json (the answers of
+	 * a new probe, in the form of recorded caps) exists, use it as the caps of the new probe. */
 	struct bml_recorded *rp = NULL;
 	struct bml_caps rpc;
 	snprintf(path, sizeof(path), "%s/load_as.json", dir);
@@ -85,7 +91,7 @@ int main(int argc, char **argv)
 	if (data) {
 		struct bml_req_elf_error e;
 		if (bml_req_from_elf(data, len, &req, &e)) {
-			precheck_failed = 1;
+			precheck_failed = 1; /* bindrt: RequirementsError → PrecheckError */
 			bml_req_elf_error_free(&e);
 		}
 		free(data);

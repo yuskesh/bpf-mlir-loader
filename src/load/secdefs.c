@@ -1,3 +1,9 @@
+/* load/secdefs.c — a copy of section_defs of libbpf v1.7.0 (libbpf.c): the order, the names, and whether
+ * SEC_EXP_ATTACH_OPT is present (SEC_ATTACHABLE_OPT counts). libbpf sets expected_attach_type to 0 when
+ * FEAT_EXP_ATTACH_TYPE is missing only if the first definition that matches the program's section has this flag (in
+ * libbpf_prepare_prog_load in libbpf.c, the only place that looks at FEAT_EXP_ATTACH_TYPE). The gate compares this
+ * table with the table that scripts/libbpf-secdefs.sh extracts from libbpf's source, so it fails when libbpf is
+ * upgraded. The rules copy libbpf's find_sec_def and sec_def_matches. */
 #include "load/internal.h"
 
 #include <stdio.h>
@@ -116,7 +122,7 @@ static const struct {
 	{"netfilter", 0},
 };
 
-
+/* libbpf's sec_def_matches: "type/" is a prefix, "type+" matches "type" or "type/...", anything else must match exactly */
 static int matches(const char *def, const char *sec)
 {
 	size_t len = strlen(def);
@@ -132,9 +138,9 @@ static int matches(const char *def, const char *sec)
 int lb_sec_exp_attach_opt(const char *sec)
 {
 	for (size_t i = 0; i < sizeof defs / sizeof defs[0]; i++)
-		if (matches(defs[i].sec, sec))
+		if (matches(defs[i].sec, sec)) /* libbpf's find_sec_def: the first definition that matches */
 			return defs[i].exp_opt || (BML_MUT("load.fentry_exp_opt") && !strcmp(defs[i].sec, "fentry+"));
-	return 0;
+	return 0; /* no definition matches: libbpf does not call the prepare function */
 }
 
 void lb_secdefs_print(void)

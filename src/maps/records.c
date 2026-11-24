@@ -1,3 +1,5 @@
+/* maps/records.c — the records check (checkRecords, recordDeclError, normalizeRecord and undeclaredNested), with the
+ * spelling regular expressions written by hand. Split out of mapdecl.c. */
 #include "maps/internal.h"
 
 #include <stdarg.h>
@@ -10,9 +12,9 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
+/* ---- spelling checks (hand-written equivalents of Go regular expressions) ---- */
 
-
-
+/* The position after skipping ^(\[[1-9][0-9]*\])* (when minzero is true, [0-9]+ is allowed instead). */
 static const char *skip_dims(const char *s, int allow_zero)
 {
 	for (;;) {
@@ -30,7 +32,7 @@ static const char *skip_dims(const char *s, int allow_zero)
 	}
 }
 
-
+/* The length of a [ui](8|16|32|64) spelling (0 if it does not match). */
 static size_t int_spelling(const char *s)
 {
 	if (s[0] != 'u' && s[0] != 'i')
@@ -52,7 +54,7 @@ static int ident(const char *s)
 	return 1;
 }
 
-
+/* memberType: ^(\[[1-9][0-9]*\])*([ui](8|16|32|64)(be)?|(record|kptr):[A-Za-z_][A-Za-z0-9_]*)$|^bpf_spin_lock$|^bpf_timer$ (the kptr form is the kernel-pointer record member that bpf-mlir added in v1.9.0) */
 static int member_type_ok(const char *s)
 {
 	if (!strcmp(s, "bpf_spin_lock") || !strcmp(s, "bpf_timer"))
@@ -68,7 +70,7 @@ static int member_type_ok(const char *s)
 	return (!strncmp(p, "record:", 7) && ident(p + 7)) || (!strncmp(p, "kptr:", 5) && ident(p + 5));
 }
 
-
+/* beSuffix: ^((\[[0-9]+\])*[ui](8|16|32|64))be$ → $1 (malloc) */
 static char *strip_be(const char *s)
 {
 	const char *p = skip_dims(s, 1);
@@ -82,7 +84,7 @@ static char *strip_be(const char *s)
 	return md_xstrdup(s);
 }
 
-
+/* nestedRecord: ^(\[[0-9]+\])*record:(.+)$ → the name (NULL if there is none) */
 static const char *nested_record(const char *s)
 {
 	const char *p = skip_dims(s, 1);
@@ -91,7 +93,7 @@ static const char *nested_record(const char *s)
 	return NULL;
 }
 
-
+/* Apply normalizeRecord and render the result as the table's string. */
 static char *decl_record(const struct bml_record_decl *d)
 {
 	struct btf_indexed *ms = calloc(d->n_members + 1, sizeof(*ms));
@@ -110,7 +112,7 @@ static char *decl_record(const struct bml_record_decl *d)
 	return s;
 }
 
-
+/* recordDeclError (a malloc'd message, NULL if there is no error) */
 static char *record_decl_error(const struct bml_record_decl *d)
 {
 	for (size_t i = 0; i < d->n_members; i++) {

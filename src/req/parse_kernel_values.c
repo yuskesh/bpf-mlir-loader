@@ -1,3 +1,5 @@
+/* Parsing of the enum, core-enum, FIB-flags and kernel-struct-size rows. This is a port of the Go reference files enumval.go, coreenum.go,
+ * fibflags.go and kstructsize.go of bpf-mlir's go/requirements package. */
 #include "req/parse_internal.h"
 
 #include <stdio.h>
@@ -59,7 +61,7 @@ static int parse_enum(struct bml_requirements *r, struct field *f,
 	size_t no = core ? r->n_enum_values : r->n_core_enums;
 	for (size_t i = 0; i < no; i++)
 		if (req_str_eq(&other[i].program, f[1]) && req_str_eq(&other[i].enumeration, f[2]) && req_str_eq(&other[i].name, f[3])) {
-
+			/* Fields are slices, so make the unquoted names before formatting. */
 			struct bml_str p = {0}, en = {0}, name = {0};
 			if (req_mkstr(&p, f[1]) || req_mkstr(&en, f[2]) || req_mkstr(&name, f[3])) {
 				free(p.p); free(en.p); free(name.p); return -2;

@@ -1,3 +1,7 @@
+/* req/check_v15.c — judgement version 15: checking the fentry farg rows (a port of checkFentryArgs in bpf-mlir's go/requirements/fentry.go).
+ * The structure and the declared number of arguments are asked of func_args with the integer spelling "-" (this is asked even for a prefix
+ * made only of integers or only of skipped arguments). For an integer argument the width and signedness are asked of func_param by its
+ * 1-based index (a kernel char is unsigned). As before, farg and farg_unknown block the load. */
 #include "req/check_internal.h"
 
 #include <stdlib.h>

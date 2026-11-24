@@ -1,3 +1,4 @@
+/* Independent ELF proof for exactly two arena externs. No caps/kernel operation. */
 #include "load/arena_extern.h"
 #include "load/internal.h"
 #include "caps/live.h"
@@ -112,7 +113,7 @@ int lb_arena_extern(const struct bml_elf *e,const struct bml_elf_sym *syms,size_
 		if(bml_elf_section_data(e,rel,&bytes,&len,&err) || len%16){free(err);goto fail;}
 		for(size_t k=0;k<len;k+=16){
 			uint64_t info=bml_elf_u64(e,bytes+k+8),offset=bml_elf_u64(e,bytes+k);
-			if((info>>32)!=candidate+1)continue;
+			if((info>>32)!=candidate+1)continue; /* Symbols() omits null index0. */
 			uint32_t type=(uint32_t)info;const struct bml_elf_shdr *target=&e->sections[rel->info];
 			const uint8_t *data;size_t size;err=NULL;reason="relocation target cannot be read";
 			if(bml_elf_section_data(e,target,&data,&size,&err)){free(err);goto fail;}

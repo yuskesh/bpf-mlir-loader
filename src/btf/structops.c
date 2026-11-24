@@ -1,3 +1,8 @@
+/* btf/structops.c — the struct_ops tables of an ELF: a copy of StructOpsTables and Spelling in bpf-mlir's
+ * go/layout/structops.go (from bpf-mlir's struct_ops declaration support). For every STT_OBJECT global variable in a
+ * `.struct_ops.link` or `.struct_ops` section it looks at the members of the BTF VAR's type (a STRUCT): a
+ * function-pointer member is the relocation's symbol (a program), and a member that is a char array is its bytes up
+ * to the NUL. The spelling is `type=<T>;`, then the data names in order, then the ops names in order. */
 #include "btf/structops.h"
 
 #include <stdio.h>
@@ -16,7 +21,7 @@ struct kv {
 static int put(struct kv **a, size_t *n, const char *k, char *v)
 {
 	for (size_t i = 0; i < *n; i++)
-		if (!strcmp((*a)[i].k, k)) {
+		if (!strcmp((*a)[i].k, k)) { /* a Go map: the last one wins */
 			free((*a)[i].v);
 			(*a)[i].v = v;
 			return 0;
@@ -43,7 +48,7 @@ static void kv_free(struct kv *a, size_t n)
 	free(a);
 }
 
-
+/* sizeOf (go/layout: PTR is 8, ARRAY is element size times count, anything else uses its size; depth 64) */
 static uint32_t size_of(const struct lbtf *b, uint32_t id, int d)
 {
 	if (d > 64)
@@ -73,7 +78,7 @@ void bml_struct_ops_tables_free(struct bml_struct_ops_table *t, size_t n)
 static int add_table(struct bml_struct_ops_table **out, size_t *n, const char *var, char *sp)
 {
 	for (size_t i = 0; i < *n; i++)
-		if (!strcmp((*out)[i].var, var)) {
+		if (!strcmp((*out)[i].var, var)) { /* out[sy.Name]: the last one wins */
 			free((*out)[i].spelling);
 			(*out)[i].spelling = sp;
 			return 0;
@@ -125,7 +130,7 @@ int bml_struct_ops_tables(const void *data, size_t len, struct bml_struct_ops_ta
 			free(de);
 			goto out;
 		}
-		struct kv *rels = NULL;
+		struct kv *rels = NULL; /* the key is the offset as a decimal string (Go's map[uint64]string) */
 		size_t nrel = 0;
 		char **keys = NULL;
 		size_t nkeys = 0;
@@ -173,7 +178,7 @@ int bml_struct_ops_tables(const void *data, size_t len, struct bml_struct_ops_ta
 			const struct bml_elf_sym *sy = &syms[s];
 			if (sy->shndx != idx || BML_ST_TYPE(sy->info) != BML_STT_OBJECT)
 				continue;
-			long vt = -1;
+			long vt = -1; /* b.vars[name]: the VAR, where the last one wins */
 			for (size_t t = 0; t < b.n; t++)
 				if (b.t[t].kind == 14 && !strcmp(b.t[t].name, sy->name))
 					vt = (long)b.t[t].type_id;

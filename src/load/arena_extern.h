@@ -1,3 +1,4 @@
+/* 1 proven finite arena extern, 0 not a candidate, -1 named shape failure. */
 #ifndef BML_LOAD_ARENA_EXTERN_H
 #define BML_LOAD_ARENA_EXTERN_H
 #include "elf/elf.h"

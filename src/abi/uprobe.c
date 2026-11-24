@@ -1,3 +1,20 @@
+/* abi/uprobe.c — the parts of a load with uprobe targets, the attach, and the link file. These follow
+ * the uprobe group of the downstream C ABI; the Go version of the logic is the downstream loader's
+ * uprobe.go.
+ * - Separate DWARF: the document's "debug_root" (when omitted it is /usr/lib/debug; "" means do not
+ *   search) and the target's "debug" (a path per program; it takes priority, and a failure does not
+ *   fall back to the root). It is opened once inside the check, all of its bytes are read, and it is
+ *   closed; the attach does not use it.
+ * - The target binary is a **load argument** ({"uprobe_targets":[{"program","path"}]}), so no
+ *   process-wide state is kept. load opens each path exactly once and shares that fd between the
+ *   check's caps uprobe_binary (sha256, symbol, DWARF) and the attach, so the check and the attach see
+ *   the same inode, which closes a time-of-check/time-of-use gap (cilium's symbol
+ *   resolution reopens the path, and over a 9p mount it reads a file that has been replaced). A uprobe program given no target is stopped
+ *   by the check with binary_unknown. The fd is closed when the object is closed.
+ * - The attach computes the file offset (st_value - p_vaddr + p_offset, within the executable
+ *   PT_LOAD) from the ELF of the same fd and attaches with `/proc/self/fd/N` and that offset, without
+ *   reopening the path. After the attach, the offset in the perf link info is compared with the
+ *   computed one; a mismatch, or a link info that cannot be read, detaches the link and returns OTHER. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -21,7 +38,7 @@ static int str_is(const struct bml_str *s, const char *lit)
 	return s->len == strlen(lit) && memcmp(s->p, lit, s->len) == 0;
 }
 
-
+/* The uprobe or uretprobe attach row of a program (NULL if none; both belong to the uprobe family of rows of requirements format version 9). *ret says whether it is a uretprobe. */
 static const struct bml_attach *uprobe_row(const struct abi_object *o, const char *name, int *ret)
 {
 	for (size_t i = 0; i < o->req->n_attaches; i++) {
@@ -43,7 +60,7 @@ static int64_t unreadable(const char *why)
 int64_t abi_uprobe_targets(struct abi_object *o, const char *doc, int64_t len)
 {
 	if (len <= 0)
-		return 0;
+		return 0; /* no target: the check stops a uprobe program with binary_unknown */
 	struct bml_json *j = NULL;
 	char *err = NULL;
 	if (bml_json_parse(doc, (size_t)len, &j, &err) != 0) {
@@ -53,7 +70,7 @@ int64_t abi_uprobe_targets(struct abi_object *o, const char *doc, int64_t len)
 	}
 	int64_t e = 0;
 	const struct bml_json *ts = j->type == BML_JSON_OBJECT ? bml_json_get(j, "uprobe_targets") : NULL;
-	const struct bml_json *dr = j->type == BML_JSON_OBJECT ? bml_json_get(j, "debug_root") : NULL;
+	const struct bml_json *dr = j->type == BML_JSON_OBJECT ? bml_json_get(j, "debug_root") : NULL; /* separate DWARF */
 	if (j->type != BML_JSON_OBJECT || (j->n && !ts) || j->n > 1 + (dr != NULL)) {
 		e = unreadable("want an object {\"uprobe_targets\": [{\"program\": …, \"path\": …, \"debug\": …}], \"debug_root\": …} (no other keys)");
 		goto out;
@@ -62,7 +79,7 @@ int64_t abi_uprobe_targets(struct abi_object *o, const char *doc, int64_t len)
 		e = unreadable("no \"uprobe_targets\" array");
 		goto out;
 	}
-	if (dr) {
+	if (dr) { /* the root for searching separate DWARF by build ID: omitted means /usr/lib/debug and "" means do not search (LiveCaps.UprobeDebugRoot) */
 		if (dr->type != BML_JSON_STRING || strlen(dr->str) != dr->len) {
 			e = unreadable("debug_root is a string");
 			goto out;
@@ -95,7 +112,7 @@ int64_t abi_uprobe_targets(struct abi_object *o, const char *doc, int64_t len)
 				e = abi_fail(BML_PRECHECK_FAILED, "bml: the uprobe targets are unreadable: program %s is given two uprobe targets", p->str);
 		if (e)
 			break;
-		if (!uprobe_row(o, p->str, NULL) && !abi_usdt_row(o, p->str)) {
+		if (!uprobe_row(o, p->str, NULL) && !abi_usdt_row(o, p->str)) { /* the binary of a usdt program is handled the same way (the check and the attach use the same fd) */
 			e = abi_fail(BML_OTHER, "bml: uprobe target for %s: the embedded object has no uprobe, uretprobe or usdt program %s", p->str, p->str);
 			break;
 		}
@@ -112,7 +129,7 @@ int64_t abi_uprobe_targets(struct abi_object *o, const char *doc, int64_t len)
 		}
 		nb[o->caps.n_bins] = (struct bml_live_bin){strdup(p->str), strdup(f->str), fd};
 		o->caps.n_bins++;
-		if (dg) {
+		if (dg) { /* the separate DWARF file of each program: opened once inside the check, read and closed (the attach does not use it, so no fd is kept) */
 			struct bml_live_debug *nd = realloc(o->caps.debugs, (o->caps.n_debugs + 1) * sizeof *nd);
 			if (!nd) {
 				e = abi_fail(BML_OTHER, "bml: out of memory");
@@ -127,7 +144,7 @@ out:
 	return e;
 }
 
-
+/* The target fd of a program (-1 if none). */
 int abi_uprobe_target_fd(const struct abi_object *o, const char *prog)
 {
 	for (size_t i = o->caps.n_bins; i-- > 0;)
@@ -136,7 +153,7 @@ int abi_uprobe_target_fd(const struct abi_object *o, const char *prog)
 	return -1;
 }
 
-
+/* The whole contents of the fd's file (malloc). Failure is NULL with errno. */
 uint8_t *abi_read_fd(int fd, size_t *len)
 {
 	size_t cap = 1 << 16, n = 0;
@@ -166,14 +183,14 @@ uint8_t *abi_read_fd(int fd, size_t *len)
 }
 
 #ifdef BML_TEST_CAPS
-
+/* Uprobe attach mutations that exist only in the test build (the counterparts of the downstream testonly_uprobe_symbol and _uprobe_offset_mode). This is test state inside the process. */
 #include <pthread.h>
 
 #include "bml/bml_testonly.h"
 
 static pthread_mutex_t test_mu = PTHREAD_MUTEX_INITIALIZER;
 static char test_prog[256], test_sym[256];
-static int test_mode;
+static int test_mode; /* 0: correct, 1: no_p_offset, 2: vaddr */
 
 int64_t bml_testonly_uprobe_symbol(const char *prog, int64_t pl, const char *sym, int64_t sl)
 {
@@ -197,7 +214,7 @@ int64_t bml_testonly_uprobe_offset_mode(const char *mode, int64_t ml)
 	return abi_ok(0);
 }
 
-
+/* The symbol used to attach a program (the test override if there is one; buf is written to). */
 static const char *test_symbol_for(const char *prog, const char *sym, char *buf, size_t cap)
 {
 	pthread_mutex_lock(&test_mu);
@@ -217,7 +234,7 @@ static int test_offset_mode(void)
 }
 #endif
 
-
+/* The file offset of symbol sym in the fd's ELF, by the same rules as the check: .symtab and .dynsym, unique by address, inside an executable PT_LOAD. Success is 0; failure is -1 with *why (malloc). */
 static int file_offset(int fd, const char *sym, uint64_t *off, char **why)
 {
 	size_t len = 0;
@@ -232,10 +249,10 @@ static int file_offset(int fd, const char *sym, uint64_t *off, char **why)
 		free(data);
 		return -1;
 	}
-
+	/* The same symbol tables and rules as the check (.symtab and .dynsym; a system libc has only .dynsym); the function is shared with req/uprobe.c. */
 	uint64_t val = 0, vaddr = 0;
 	if (bml_uprobe_file_offset(&elf, sym, off, &val, &vaddr, why) == 0) {
-		if (BML_MUT("uprobe.offset_no_p_offset"))
+		if (BML_MUT("uprobe.offset_no_p_offset")) /* a test-entry mutation of the offset */
 			*off = val - vaddr;
 #ifdef BML_TEST_CAPS
 		if (test_offset_mode() == 1)
@@ -250,7 +267,7 @@ static int file_offset(int fd, const char *sym, uint64_t *off, char **why)
 	return rc;
 }
 
-
+/* The uprobe offset, cookie and file from the perf link info (1 if the link is not a perf link of the wanted type, UPROBE or URETPROBE; -errno if it cannot be read). */
 int abi_uprobe_info(int fd, uint32_t want, uint32_t *off, uint64_t *cookie, char *file, uint32_t cap)
 {
 	struct bpf_link_info info;
@@ -270,7 +287,7 @@ int abi_uprobe_info(int fd, uint32_t want, uint32_t *off, uint64_t *cookie, char
 	return 0;
 }
 
-
+/* uprobe and uretprobe (the uretprobe <symbol> row of the uprobe family of attach rows, requirements format version 9) */
 static int64_t attach_uprobe_body(int64_t obj, const char *prog, int64_t plen, int64_t pid, int ret)
 {
 	int64_t e;
@@ -307,7 +324,7 @@ static int64_t attach_uprobe_body(int64_t obj, const char *prog, int64_t plen, i
 	char fdpath[32];
 	snprintf(fdpath, sizeof fdpath, "/proc/self/fd/%d", fd);
 	LIBBPF_OPTS(bpf_uprobe_opts, uo, .retprobe = ret != 0);
-
+	/* bml's pid 0 means all processes (the same as cilium's UprobeOptions.PID), whereas libbpf uses -1 */
 	struct bpf_link *l = bpf_program__attach_uprobe_opts(p, pid == 0 ? -1 : (pid_t)pid, fdpath, (size_t)off, &uo);
 	if (!l) {
 		int err = errno;
@@ -316,11 +333,11 @@ static int64_t attach_uprobe_body(int64_t obj, const char *prog, int64_t plen, i
 					? " (hint: attaching a uprobe needs CAP_SYS_ADMIN in addition to CAP_BPF + CAP_PERFMON — bpf-mlir nonroot.md)"
 					: "");
 	}
-
+	/* Compare the offset of the real attach target after the attach (from the perf link info, type included) with the computed value. */
 	uint32_t got = 0;
 	char file[4096];
 	int rc = abi_uprobe_info(bpf_link__fd(l), ret ? BPF_PERF_EVENT_URETPROBE : BPF_PERF_EVENT_UPROBE, &got, NULL, file, sizeof file);
-	if (rc == 0 && ret && BML_MUT("attach.uretprobe_offset_other"))
+	if (rc == 0 && ret && BML_MUT("attach.uretprobe_offset_other")) /* a mutation that tries the form where the kernel attached at another offset */
 		got += 16;
 	if (rc < 0) {
 		bpf_link__destroy(l);

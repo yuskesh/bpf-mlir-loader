@@ -1,3 +1,9 @@
+/* caps/live_e499.c — a C port of kload's HasKfuncLoad and CheckTracepointBuffer (kernel/internal/kload/kfunc_load.go, tpbuf.go and
+ * kernel/core/tpbuf.go in the Go reference loader). HasKfuncLoad answers "may this kfunc be used?": it only loads a small
+ * program that calls the kfunc with the initial profile, and never attaches or test-runs it. CheckTracepointBuffer examines
+ * the pointee of argument 0 of the function pointer in the typedef btf_trace_<name>, using BTF alone.
+ * The answer is false only for the named line "calling kernel function <name> is not allowed". Any other load failure, and a
+ * kfunc or profile that has no recipe, is Unknown (which does not stop the load). */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 #include "caps/live_arena.h"
@@ -40,7 +46,7 @@ static const struct recipe *recipe_of(const char *n)
 	return NULL;
 }
 
-
+/* kfuncInitialSpec: builds the prog type, attach type, attach target (resolved name and kind) and flags from the profile. Returns 0 on success. */
 struct spec {
 	uint32_t type, attach;
 	const char *attach_to;
@@ -63,7 +69,7 @@ static int initial_spec(const struct bml_kfunc_profile *p, struct spec *s, char 
 		s->type = BPF_PROG_TYPE_XDP, id = 6, s->attach = BPF_XDP, sec = "xdp", at = "xdp", s->ret = 2;
 	else if (!strcmp(k, "sched_cls")) {
 		int in = !strcmp(p->attach_type, "tcx_ingress");
-		int nk = !strncmp(p->attach_type, "netkit_", 7), primary = !strcmp(p->attach_type, "netkit_primary");
+		int nk = !strncmp(p->attach_type, "netkit_", 7), primary = !strcmp(p->attach_type, "netkit_primary"); /* netkit attach types */
 		s->type = BPF_PROG_TYPE_SCHED_CLS, id = 3, s->attach = nk ? (primary ? BPF_NETKIT_PRIMARY : BPF_NETKIT_PEER) : in ? BPF_TCX_INGRESS : BPF_TCX_EGRESS;
 		sec = nk ? (primary ? "netkit/primary" : "netkit/peer") : in ? "tcx/ingress" : "tcx/egress";
 		at = nk ? (primary ? "netkit_primary" : "netkit_peer") : in ? "tcx_ingress" : "tcx_egress";
@@ -132,12 +138,13 @@ static int initial_spec(const struct bml_kfunc_profile *p, struct spec *s, char 
 	if (p->prog_type_id != id || strcmp(p->prog_type, tn) || strcmp(p->section, sec) || strcmp(p->target_kind, tk) || p->prog_flags != s->flags ||
 	    strcmp(p->attach_type, at))
 		return -1;
-	if ((!strcmp(tk, "none") || !strcmp(tk, "cgroup")) && p->target[0])
+	if ((!strcmp(tk, "none") || !strcmp(tk, "cgroup")) && p->target[0]) /* Go's {none, ingress, egress, cgroup}; the profile of a sched_cls program is none */
 		return -1;
 	return 0;
 }
 
-
+/* The vmlinux FUNC id of a dependent kfunc (its prototype is checked against the recipe). Returns 0 if it was resolved;
+ * anything else is the answer, with its text in *msg. */
 static int dep_id(struct bml_live *l, const struct recipe *r, uint32_t *id, char **msg)
 {
 	const char *verr;
@@ -180,10 +187,10 @@ static int dep_id(struct bml_live *l, const struct recipe *r, uint32_t *id, char
 }
 
 #define I(code, regs, off, imm) {(code), (regs), (uint8_t)((off) & 0xff), (uint8_t)((uint16_t)(off) >> 8), (uint8_t)(imm), (uint8_t)((uint32_t)(imm) >> 8), (uint8_t)((uint32_t)(imm) >> 16), (uint8_t)((uint32_t)(imm) >> 24)}
-#define CALL(id) I(0x85, 0x20, 0, (id))
-#define MOVI(dst, v) I(0xb7, (dst), 0, (v))
-#define MOVR(dst, src) I(0xbf, (dst) | (src) << 4, 0, 0)
-#define JEQ0(dst, off) I(0x15, (dst), (off), 0)
+#define CALL(id) I(0x85, 0x20, 0, (id))		  /* call kfunc (src_reg BPF_PSEUDO_KFUNC_CALL) */
+#define MOVI(dst, v) I(0xb7, (dst), 0, (v))	  /* mov64 dst, imm */
+#define MOVR(dst, src) I(0xbf, (dst) | (src) << 4, 0, 0) /* mov64 dst, src */
+#define JEQ0(dst, off) I(0x15, (dst), (off), 0)	  /* jeq dst, 0, +off */
 #define EXIT I(0x95, 0, 0, 0)
 
 int bml_live_kfunc_load(struct bml_live *l, const struct bml_kfunc_profile *p, const char *name, const char *ret, const struct bml_str *args, size_t n,
@@ -223,10 +230,10 @@ int bml_live_kfunc_load(struct bml_live *l, const struct bml_kfunc_profile *p, c
 	if (session) {
 		uint8_t x[][8] = {CALL(ids[0]), MOVI(0, rv), EXIT};
 		memcpy(ins, x, sizeof x), ni = 3;
-	} else if (nd == 2) {
+	} else if (nd == 2) { /* from_pid → release */
 		uint8_t x[][8] = {MOVI(1, pid), CALL(ids[0]), MOVR(6, 0), JEQ0(6, 2), MOVR(1, 6), CALL(ids[1]), MOVI(0, rv), EXIT};
 		memcpy(ins, x, sizeof x), ni = 8;
-	} else {
+	} else { /* from_pid → acquire → release × 2 */
 		uint8_t x[][8] = {MOVI(1, pid), CALL(ids[0]), MOVR(6, 0), JEQ0(6, 8),  MOVR(1, 6), CALL(ids[1]), MOVR(7, 0),
 				  JEQ0(7, 2),	MOVR(1, 7),   CALL(ids[2]), MOVR(1, 6), CALL(ids[2]), MOVI(0, rv), EXIT};
 		memcpy(ins, x, sizeof x), ni = 14;
@@ -242,7 +249,7 @@ int bml_live_kfunc_load(struct bml_live *l, const struct bml_kfunc_profile *p, c
 	pr.name = "kfunc_probe";
 	pr.log_mode = LV_LOG_1;
 	char resolved[512];
-	if (s.attach_kind) {
+	if (s.attach_kind) { /* cilium's AttachTo resolution (tp_btf uses btf_trace_<t>, iter uses bpf_iter_<t>) */
 		snprintf(resolved, sizeof resolved, "%s%s", s.attach == BPF_TRACE_RAW_TP ? "btf_trace_" : s.attach == BPF_TRACE_ITER ? "bpf_iter_" :
 			 s.attach == BPF_LSM_MAC ? "bpf_lsm_" : "",
 			 p->target);
@@ -254,7 +261,7 @@ int bml_live_kfunc_load(struct bml_live *l, const struct bml_kfunc_profile *p, c
 		*out = 1;
 		return BML_Q_OK;
 	}
-
+	/* classifyKfuncLoadError */
 	char want[256];
 	snprintf(want, sizeof want, "calling kernel function %s is not allowed", name);
 	int named = 0, other = 0;
@@ -278,12 +285,13 @@ int bml_live_kfunc_load(struct bml_live *l, const struct bml_kfunc_profile *p, c
 	else if (!named)
 		st = unknown(msg, "kfunc load result does not establish named permission denial: %s", t, NULL);
 	free(t);
-	return st;
+	return st; /* named denial: false (*out is 0) */
 }
 
+/* ---- tracepoint buffer ---- */
 
-
-
+/* strip: removes typedef, const, volatile, restrict and type_tag layers, up to 32 of them (a 33rd qualifier is an error, and so is
+ * a cycle). Returns 0 and fills *out on success. */
 static int strip(const struct bml_kbtf *kb, uint32_t id, uint32_t *out, const char **err)
 {
 	uint32_t seen[34];
@@ -336,7 +344,7 @@ int bml_live_tracepoint_buffer(struct bml_live *l, const char *name, const char 
 		free(err);
 		return r2 < 0 ? lv_oom(out, msg) : BML_Q_ERROR;
 	}
-
+	/* checkTPBufferPrototype: only one mismatch is reported */
 	const char *why = NULL, *se = NULL;
 	char got[256] = "";
 	uint32_t ptr, fp, ret, d0, a0, pt;

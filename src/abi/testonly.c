@@ -1,3 +1,8 @@
+/* abi/testonly.c — entries that exist only in the test build: global_set_raw, ringbuf_fault and
+ * freeze_map. (They are the landing of the "test entries" section of the downstream C ABI document.
+ * The load that skips the check is in object.c, and the uprobe mutations are in uprobe.c.) All of
+ * them exist only in a build with -DBML_TEST_CAPS; the gate checks with nm that the product's
+ * libbml.a has no bml_testonly_ symbol. */
 #ifdef BML_TEST_CAPS
 #define _GNU_SOURCE
 #include "abi/internal.h"
@@ -26,8 +31,10 @@ static struct bpf_map *map_named(struct abi_object *o, const char *name)
 	return bpf_object__find_map_by_name(bml_obj_bpf(o->lo), name);
 }
 
-
-
+/* A direct write to a global after load (the downstream testonly_global_set_raw, the negative control
+ * that shows a frozen .rodata really rejects the write): libbpf's bpf_map__set_initial_value, and a
+ * BPF_MAP_UPDATE_ELEM on the section's map. The result is OK with the message
+ * "libbpf=<error|nil> kernel=<error|nil>"; a name that is not in the declaration is STATE. */
 static int64_t set_raw_body(struct abi_object *o, const char *name, uint64_t bits)
 {
 	const struct bml_global_decl *g = NULL;
@@ -53,7 +60,7 @@ static int64_t set_raw_body(struct abi_object *o, const char *name, uint64_t bit
 		free(buf);
 		return abi_fail(BML_OTHER, "bml: global %s: the %s map or the symbol cannot be read", name, suffix);
 	}
-
+	/* libbpf: the initial value cannot be changed after load (EBUSY is expected); pass the whole of the same value. */
 	size_t isz = 0;
 	const void *init = bpf_map__initial_value(sm, &isz);
 	int le = 0;
@@ -64,7 +71,7 @@ static int64_t set_raw_body(struct abi_object *o, const char *name, uint64_t bit
 		le = bpf_map__set_initial_value(sm, buf, vs) != 0 ? errno : 0;
 	} else
 		le = EINVAL;
-
+	/* kernel: read the current value, overwrite the width in question and update (.rodata is frozen; EPERM is expected). */
 	int ke = 0;
 	if (bpf_map_lookup_elem(bpf_map__fd(sm), &key, buf) != 0)
 		ke = errno;
@@ -97,7 +104,7 @@ int64_t bml_testonly_global_set_raw(int64_t obj, const char *name, int64_t len, 
 	return e;
 }
 
-
+/* Freezes a map (BPF_MAP_FREEZE: writes and deletes from user space then fail with EPERM). A map that does not exist is STATE. */
 int64_t bml_testonly_freeze_map(int64_t obj, const char *name, int64_t len)
 {
 	int64_t e;
@@ -110,7 +117,7 @@ int64_t bml_testonly_freeze_map(int64_t obj, const char *name, int64_t len)
 		e = abi_fail(BML_OTHER, "bml: a negative length or a NULL string with a length");
 	else if (!m)
 		e = abi_fail(BML_STATE, "bml: the embedded object has no map %s", nm);
-	else if (BML_MUT("testonly.freeze_noop"))
+	else if (BML_MUT("testonly.freeze_noop")) /* mutation control: do not freeze (only the test that expects the write after the freeze to fail with EPERM then fails) */
 		e = abi_ok(0);
 	else if (bpf_map_freeze(bpf_map__fd(m)) != 0)
 		e = abi_fail(BML_OTHER, "bml: freeze %s: %s", nm, abi_errno(errno));
@@ -121,8 +128,10 @@ int64_t bml_testonly_freeze_map(int64_t obj, const char *name, int64_t len)
 	return e;
 }
 
-
-
+/* Maps the consumer page of a ring buffer, unmaps it and then reads it. It does not return: the
+ * process dies with SIGSEGV. bml installs no signal handler, so the downstream runtime's handler or
+ * the default action takes over; this fixes the fail-loud behaviour. If the mapping cannot be made,
+ * the result is OTHER. */
 int64_t bml_testonly_ringbuf_fault(int64_t obj, const char *name, int64_t len)
 {
 	int64_t e;
@@ -146,8 +155,8 @@ int64_t bml_testonly_ringbuf_fault(int64_t obj, const char *name, int64_t len)
 		return e;
 	}
 	munmap((void *)p, (size_t)pg);
-	uint8_t x = p[0];
+	uint8_t x = p[0]; /* a deliberate fault */
 	abi_object_release(o);
-	return abi_ok(x);
+	return abi_ok(x); /* not reached */
 }
 #endif

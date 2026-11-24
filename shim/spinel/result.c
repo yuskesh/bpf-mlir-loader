@@ -34,7 +34,7 @@ static struct rdsz *rds;
 static size_t n_rds, cap_rds;
 static int64_t next_id = SH_BASE;
 
-
+/* Grows the array. Returns 0 on failure and leaves the original array in place. */
 static int grow(void **v, size_t n, size_t *cap, size_t sz)
 {
 	if (n < *cap)
@@ -65,7 +65,7 @@ int64_t sh_result(int64_t kind, int64_t value, const char *fmt, ...)
 	} else
 		free(m);
 	pthread_mutex_unlock(&mu);
-	return id;
+	return id; /* -1 (out of memory) is an unknown result, whose kind is STATE */
 }
 
 static struct shres *find_sh(int64_t r)
@@ -139,7 +139,7 @@ int64_t spinelbpf_result_value(int64_t r)
 	return bml_result_value(r);
 }
 
-
+/* Makes r own a copy of s (length n; it may contain NUL bytes) in which each NUL is replaced by the two characters `\0`. */
 static char *own(int64_t r, const char *s, int64_t n)
 {
 	size_t k = 0;
@@ -182,7 +182,7 @@ char *spinelbpf_result_message(int64_t r)
 	int64_t n = 0;
 	const char *m = bml_result_message(r, &n);
 	if (m && (int64_t)strlen(m) == n)
-		return (char *)m;
+		return (char *)m; /* owned by the result (contains no NUL) */
 	return own(r, m ? m : "", m ? n : 0);
 }
 
@@ -191,7 +191,7 @@ int64_t spinelbpf_result_unmet_count(int64_t r)
 	return r >= SH_BASE ? 0 : bml_result_unmet_count(r);
 }
 
-
+/* one line of the form `kind\tprogram\tname\tdetail` */
 char *spinelbpf_result_unmet(int64_t r, int64_t i)
 {
 	if (r >= SH_BASE || i < 0 || i >= bml_result_unmet_count(r))

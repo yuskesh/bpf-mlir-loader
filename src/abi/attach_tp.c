@@ -45,7 +45,7 @@ static int valid_name(const char *s, size_t n)
 	return 1;
 }
 
-
+/* The <cat>/<event> of the declaration, from either the newer trace_tp <cat>/<event> row or the older tracepoint tp:<cat>/<event> row. If present, stored in cat and ev (NUL-terminated). */
 static int declared(const struct abi_object *o, const char *name, char cat[256], char ev[256])
 {
 	for (size_t i = 0; i < o->req->n_attaches; i++) {
@@ -74,7 +74,7 @@ static int declared(const struct abi_object *o, const char *name, char cat[256],
 	return 0;
 }
 
-
+/* Reads a file into buf (NUL-terminated). Success is 0; failure is -errno. */
 static int read_small(const char *path, char *buf, size_t cap)
 {
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -101,7 +101,7 @@ static int read_small(const char *path, char *buf, size_t cap)
 	return 0;
 }
 
-
+/* The events/<cat>/<ev>/id file of tracefs (/sys/kernel/tracing, falling back to /sys/kernel/debug/tracing). Failure is -errno (the error of the last directory tried). */
 static int event_id(const char *cat, const char *ev, uint64_t *id)
 {
 	static const char *const roots[] = {"/sys/kernel/tracing", "/sys/kernel/debug/tracing"};
@@ -131,7 +131,7 @@ static int perf_open(uint64_t id, int cpu)
 	attr.type = PERF_TYPE_TRACEPOINT;
 	attr.size = sizeof attr;
 	attr.config = id;
-	attr.sample_type = PERF_SAMPLE_RAW;
+	attr.sample_type = PERF_SAMPLE_RAW; /* the same attr as cilium's openTracepointPerfEvent and the Go reference (opened enabled) */
 	attr.sample_period = 1;
 	attr.wakeup_events = 1;
 	return (int)syscall(SYS_perf_event_open, &attr, -1, cpu, -1, PERF_FLAG_FD_CLOEXEC);
@@ -168,7 +168,7 @@ static int64_t attach_tp_body(int64_t obj, const char *prog, int64_t len, int64_
 		free(cerr);
 		return e;
 	}
-	if (BML_MUT("attach.tp_cpu0_only"))
+	if (BML_MUT("attach.tp_cpu0_only")) /* the default form of libbpf and cilium (CPU 0 only), to see whether the tests catch events dropped on the other CPUs */
 		ncpu = 1;
 	int *fds = calloc(ncpu, sizeof *fds);
 	if (!fds) {
@@ -190,7 +190,7 @@ static int64_t attach_tp_body(int64_t obj, const char *prog, int64_t len, int64_
 		e = abi_fail(BML_OTHER, "bml: attach tracepoint %s to %s/%s: link on CPU %d: %s", name, cat, ev, cpus[0], abi_errno(errno));
 		goto fail;
 	}
-	fds[0] = -1;
+	fds[0] = -1; /* owned by libbpf's perf link (closed on detach) */
 	char got[256] = {0};
 	struct bpf_link_info info;
 	memset(&info, 0, sizeof info);
@@ -199,7 +199,7 @@ static int64_t attach_tp_body(int64_t obj, const char *prog, int64_t len, int64_
 	uint32_t ilen = sizeof info;
 	int irc = bpf_link_get_info_by_fd(bpf_link__fd(l), &info, &ilen) != 0 ? -errno : 0;
 	got[sizeof got - 1] = 0;
-	if (irc == 0 && BML_MUT("attach.tp_name_other"))
+	if (irc == 0 && BML_MUT("attach.tp_name_other")) /* a mutation that tries the form where the kernel attached to another event */
 		strcat(got, "_x");
 	if (irc != 0 || info.type != BPF_LINK_TYPE_PERF_EVENT || info.perf_event.type != BPF_PERF_EVENT_TRACEPOINT || strcmp(got, ev) != 0) {
 		bpf_link__destroy(l);
@@ -213,7 +213,7 @@ static int64_t attach_tp_body(int64_t obj, const char *prog, int64_t len, int64_
 		goto fail;
 	}
 	free(cpus);
-
+	/* The other CPUs' fds get the same lifetime as the link (fds[0] is -1, so what is handed to the table starts from index 1). */
 	int *extra = NULL;
 	size_t nx = nfd - 1;
 	if (nx) {

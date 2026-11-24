@@ -1,3 +1,12 @@
+/* caps/recorded_json.c — the JSON reading part of a C port of go/requirements/recorded.go (v0.12.0).
+ *
+ * The decoding rules follow Go's encoding/json (DisallowUnknownFields) decoding into a struct: null means "not set" (a string becomes "",
+ * a bool false, a pointer nil, a map nil), and a wrong type is an error. "Exactly one" for an Answer follows Go's test (an unknown, error
+ * or file of "" is unset; a text of "" is set; a value of false is set; a null diffs is unset and [] is set).
+ * The C code is stricter than Go in two ways (a deliberate decision; the Go reference loader was later made equally strict): the five
+ * classes of JSON parser errors, and differences in the case of keys (Go matches struct fields ignoring case, while the C code rejects
+ * such a key as unknown). */
+
 #include "caps/recorded_internal.h"
 
 #include <errno.h>
@@ -56,7 +65,7 @@ void bml_recorded_free(struct bml_recorded *r)
 	free(r);
 }
 
-
+/* ---- small decode helpers ---- */
 
 int rc_check_keys(const struct bml_json *o, const char *const *allowed, size_t n, const char *where, char **err)
 {
@@ -73,7 +82,7 @@ int rc_check_keys(const struct bml_json *o, const char *const *allowed, size_t n
 	return 0;
 }
 
-
+/* A string field: a missing key or null gives *out = NULL (the caller reads it as unset), a STRING is copied, anything else is an error */
 int rc_get_str(const struct bml_json *o, const char *key, char **out, char **err)
 {
 	*out = NULL;
@@ -108,7 +117,7 @@ int rc_get_bool(const struct bml_json *o, const char *key, int *set, int *out, c
 	return 0;
 }
 
-
+/* map[string]string (a null value becomes "") */
 int rc_get_kv(const struct bml_json *o, const char *key, struct bml_kv **out, size_t *n, int *has, char **err)
 {
 	*out = NULL;
@@ -157,7 +166,7 @@ int rc_decode_answer(const struct bml_json *v, struct answer *a, char **err)
 	if (rc_get_bool(v, "value", &a->has_value, &a->value, err) || rc_get_str(v, "unknown", &a->unknown, err) ||
 	    rc_get_str(v, "error", &a->error, err) || rc_get_str(v, "text", &a->text, err) || rc_get_str(v, "file", &a->file, err))
 		return -1;
-
+	/* an unknown, error or file of "" is unset (the omitempty comparison) */
 	if (a->unknown && !a->unknown[0])
 		free(a->unknown), a->unknown = NULL;
 	if (a->error && !a->error[0])
@@ -201,8 +210,8 @@ static const struct bml_json_field f_loader[] = {{"name", &d_string},
 						 {"uprobe_reopens_path", &d_bool},
 						 {"core_poisons_missing_field", &d_bool},
 						 {"btf_rewrite", &d_strmap},
-						 {"usdt_attach", &d_string}                           ,
-						 {"sockmap_attach", &d_string}                           ,
+						 {"usdt_attach", &d_string} ,
+						 {"sockmap_attach", &d_string} ,
 						 {"lsm_cgroup_load", &d_string},
 						 {"fsession_load", &d_string},
 						 {"ksyscall_attach", &d_string}, {"hidden_data_vars", &d_string}, {"typed_ksym", &d_string},
@@ -211,9 +220,9 @@ const struct bml_json_desc rc_d_loader = {.kind = BML_JD_STRUCT, .fields = f_loa
 static const struct bml_json_field f_probed[] = {{"uid", &d_int}, {"cap_eff", &d_string}};
 static const struct bml_json_desc d_probed = {.kind = BML_JD_STRUCT, .fields = f_probed, .n_fields = 2};
 static const struct bml_json_field f_caps[] = {{"format", &d_string},     {"probed_as", &d_probed}, {"loader", &rc_d_loader},
-					       {"queries", &d_queries}, {"privileged_queries", &d_queries}                                           };
+					       {"queries", &d_queries}, {"privileged_queries", &d_queries} /* added in ebpf-caps recording format 6 */};
 const struct bml_json_desc rc_d_caps = {.kind = BML_JD_STRUCT, .fields = f_caps, .n_fields = 5};
-
+/* The strict reading (section 13): parse (byte-level rules and key_case), then the type check (unknown_key, type) */
 struct bml_json *rc_strict(const char *data, size_t len, const struct bml_json_desc *d, const char *prefix, char **err,
 			       enum bml_json_rule *rule)
 {

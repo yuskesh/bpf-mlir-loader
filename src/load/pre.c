@@ -1,3 +1,6 @@
+/* load/pre.c — the guards before the load: the shape of the ELF (the narrow shape of the ELFs bpf-mlir produces, as
+ * tallied over 673 ELFs of the repository), and the comparison with
+ * libbpf's feature decisions (feat_supported). */
 #include "load/internal.h"
 
 #include <stdarg.h>
@@ -47,13 +50,14 @@ const char *lb_feat_name(int f)
 	return "FEAT_?";
 }
 
+/* ---- the shape of the ELF ---- */
 
-
-
-
+/* The section forms of the programs that bpf-mlir's emitter writes (ProgramKinds.def), with their kind and test-run
+ * family. The guard's ELF shape check and the C ABI's test-run kind decision both look here, so when a kind is added
+ * only this table needs to change. prefix means the form is "<form>/<target>" (the target is not empty). */
 static const struct sec_def {
 	const char *name;
-	int prefix, wave1;
+	int prefix, wave1; /* wave1: 1 is the first wave of sections (the mutant load.wave1_sections_reject removes it); 2 is the second to fourth waves (the mutant load.wave24_sections_reject removes it) */
 	const char *kind;
 	int family;
 } sec_defs[] = {
@@ -67,7 +71,7 @@ static const struct sec_def {
 	{"fentry/", 1, 0, "fentry", BML_RUN_TRACING},
 	{"fexit/", 1, 0, "fexit", BML_RUN_TRACING},
 	{"tp_btf/", 1, 0, "tp_btf", BML_RUN_TRACING},
-
+	/* The first wave of bpf-mlir's program-type coverage (libbpf's behavior for these sections was examined when they were added) */
 	{"socket", 0, 1, "socket_filter", BML_RUN_SKB},
 	{"action", 0, 1, "sched_act", BML_RUN_SKB},
 	{"cgroup_skb/ingress", 0, 1, "cgroup_skb", BML_RUN_SKB},
@@ -79,16 +83,16 @@ static const struct sec_def {
 	{"sk_lookup", 0, 1, "sk_lookup", BML_RUN_CTX},
 	{"netfilter", 0, 1, "netfilter", BML_RUN_NF},
 	{"uretprobe", 0, 1, "uretprobe", BML_RUN_NONE},
-	{"uretprobe/", 1, 1, "uretprobe", BML_RUN_NONE},
+	{"uretprobe/", 1, 1, "uretprobe", BML_RUN_NONE}, /* the repository's uretprobe sections are uretprobe/<symbol> (the first survey looked only at ELFs that the check already stops, and missed this one) */
 	{"syscall", 0, 1, "syscall", BML_RUN_CTX},
 	{"raw_tp/", 1, 1, "raw_tp", BML_RUN_CTX},
 	{"kretprobe/", 1, 1, "kretprobe", BML_RUN_NONE},
 	{"iter/", 1, 1, "iter", BML_RUN_NONE},
 	{"fmod_ret/", 1, 1, "fmod_ret", BML_RUN_TRACING},
-
+	/* Fourth-wave tracepoint (libbpf's tracepoint+ is SEC_NONE with expected attach type 0, and is not rewritten at load time). Attach is done by bml_attach_tracepoint. */
 	{"tracepoint/", 1, 0, "tracepoint", BML_RUN_NONE},
-	
-
+	/* Second to fourth waves (sections from bpf-mlir's ProgramAttaches.def; libbpf's behavior for them was examined when they were added). No test-run hook is opened (family NONE).
+	 * freplace (load needs the target program's fd) and struct_ops (libbpf recreates maps and changes autoload) are not in the table; they are handled separately. */
 	{"lsm/", 1, 2, "lsm", BML_RUN_NONE},
 	{"lsm.s/", 1, 2, "lsm_s", BML_RUN_NONE},
 	{"cgroup/sock_create", 0, 2, "cgroup_sock", BML_RUN_NONE},
@@ -121,11 +125,11 @@ static const struct sec_def {
 	{"perf_event", 0, 2, "perf_event", BML_RUN_NONE},
 	{"raw_tp.w/", 1, 2, "raw_tp_writable", BML_RUN_NONE},
 	{"lirc_mode2", 0, 2, "lirc_mode2", BML_RUN_NONE},
-
+	/* USDT (libbpf's usdt+; the UPROBE_MULTI rewrite at load time is removed by usdt_point_form in load.c). Attach is done by bml_attach_usdt. */
 	{"usdt", 0, 0, "usdt", BML_RUN_NONE},
-
+	/* ksyscall (libbpf's ksyscall+ is KPROBE and SEC_NONE, and loads like a kprobe; bpf-mlir does not emit kretsyscall). Attach is done by bml_attach_ksyscall. */
 	{"ksyscall/", 1, 0, "ksyscall", BML_RUN_NONE},
-
+	/* Sections introduced with requirements formats 30 to 32 (the BPF_F_SLEEPABLE check is in load.c). No test-run hook is opened. The mutant load.target_sections_reject restores the stop at stage A. */
 	{"fentry.s/", 1, 3, "fentry", BML_RUN_NONE},
 	{"netkit/primary", 0, 3, "netkit", BML_RUN_NONE},
 	{"netkit/peer", 0, 3, "netkit", BML_RUN_NONE},
@@ -158,7 +162,7 @@ static int prog_section(const char *n)
 	return sec_def_of(n) != NULL;
 }
 
-
+/* content sections (a relocation may target them: debug, BTF and eh_frame) */
 static int meta_section(const char *n)
 {
 	return strcmp(n, ".BTF") == 0 || strcmp(n, ".BTF.ext") == 0 || strcmp(n, ".eh_frame") == 0 || strncmp(n, ".debug_", 7) == 0;
@@ -174,7 +178,7 @@ static int data_section(const char *n)
 	return 0;
 }
 
-
+/* The members of the struct of a var in the .maps DATASEC may be only the libbpf map-definition names that bpf-mlir uses (pinning, values and inner maps are rejected) */
 static int check_maps_defs(const struct bml_elf *e, struct bml_load_result *r)
 {
 	const struct bml_elf_shdr *s = bml_elf_section(e, ".BTF");
@@ -245,11 +249,11 @@ int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r)
 		return rc;
 	}
 	int rc = 0;
-	if (!e.is64 || e.big_endian || e.machine != 247             )
+	if (!e.is64 || e.big_endian || e.machine != 247 /* EM_BPF */)
 		rc = lb_fail(r, BML_LOAD_SHAPE, "not a little-endian 64-bit BPF ELF");
 	for (size_t i = 0; i < e.n_sections && !rc; i++) {
 		const struct bml_elf_shdr *s = &e.sections[i];
-		if (s->type == 4               ) {
+		if (s->type == 4 /* SHT_RELA */) {
 			rc = lb_fail(r, BML_LOAD_SHAPE, "section %s is RELA (bpf-mlir emits REL only)", s->name);
 			break;
 		}
@@ -258,7 +262,7 @@ int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r)
 				rc = lb_fail(r, BML_LOAD_SHAPE, "section %s is not in the bpf-mlir ELF form", s->name);
 			continue;
 		}
-
+		/* relocations: program sections allow R_BPF_64_64 (1) and R_BPF_64_32 (10); BTF and debug sections allow ABS64 (2), ABS32 (3) and NODYLD32 (4) */
 		const char *target = strncmp(s->name, ".rel", 4) == 0 ? s->name + 4 : "";
 		int prog = prog_section(target), meta = meta_section(target);
 		if (!prog && !meta) {
@@ -305,9 +309,9 @@ int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r)
 	return rc;
 }
 
+/* ---- libbpf's feature decisions ---- */
 
-
-
+/* a feature of a btf row -> libbpf's feature (in one place a single libbpf feature decides two of these features, as found in the loader design survey) */
 static int feat_of(const char *f)
 {
 	static const struct {
@@ -325,8 +329,9 @@ static int feat_of(const char *f)
 	return -1;
 }
 
-
-
+/* Apply libbpf's sanitize rules to the ELF's .BTF (before libbpf's finalize; the kind, linkage, kflag and name of the
+ * types, which are what the sanitize decision depends on, do not change in finalize). The result is the missing
+ * feature (LBF_*) if there is a type that would be rewritten, -1 if there is none, and -2 if the BTF cannot be read. */
 int lb_btf_rewrite(const uint8_t *elf, size_t len)
 {
 	struct bml_elf e;
@@ -364,7 +369,7 @@ int lb_btf_rewrite(const uint8_t *elf, size_t len)
 	for (uint32_t id = 1; id < kb.n && out < 0; id++) {
 		struct kbtf_type t;
 		bml_kbtf_type(&kb, id, &t);
-
+		/* keep libbpf's if / else if order */
 		if ((!has_datasec && t.kind == KBTF_VAR) || (!has_decl_tag && t.kind == KBTF_DECL_TAG))
 			out = !has_datasec && t.kind == KBTF_VAR ? LBF_BTF_DATASEC : LBF_BTF_DECL_TAG;
 		else if (!has_datasec && t.kind == KBTF_DATASEC)
@@ -374,13 +379,13 @@ int lb_btf_rewrite(const uint8_t *elf, size_t len)
 		else if (!has_func && (t.kind == KBTF_FUNC_PROTO || t.kind == KBTF_FUNC))
 			out = LBF_BTF_FUNC;
 		else if (!has_func_global && t.kind == KBTF_FUNC && t.vlen != 0)
-			out = LBF_BTF_GLOBAL_FUNC;
+			out = LBF_BTF_GLOBAL_FUNC; /* if the linkage (vlen) is not static (0), it is rewritten to static */
 		else if (!has_float && t.kind == KBTF_FLOAT)
 			out = LBF_BTF_FLOAT;
 		else if (!has_type_tag && t.kind == KBTF_TYPE_TAG)
 			out = LBF_BTF_TYPE_TAG;
 		else if (!has_enum64 && t.kind == KBTF_ENUM && t.kflag)
-			out = LBF_BTF_ENUM64;
+			out = LBF_BTF_ENUM64; /* the kflag is cleared; if it was not set, the bytes are the same */
 		else if (!has_enum64 && t.kind == KBTF_ENUM64)
 			out = LBF_BTF_ENUM64;
 	}
@@ -391,10 +396,10 @@ int lb_btf_rewrite(const uint8_t *elf, size_t len)
 int lb_check_features(const uint8_t *elf, size_t len, const struct bml_requirements *req, const struct bml_caps *caps,
 		      struct bml_load_result *r)
 {
-	if (BML_MUT("load.no_pre_features"))
+	if (BML_MUT("load.no_pre_features")) /* mutant control: see whether the guards after the load alone stop it */
 		return 0;
-
-	for (size_t i = 0; i < req->n_btf_features && !BML_MUT("load.no_predict"); i++) {
+	/* 1. Compare the prediction (the check's btf_feature answer) with libbpf's actual decision; a mismatch is Unknown */
+	for (size_t i = 0; i < req->n_btf_features && !BML_MUT("load.no_predict"); i++) { /* mutant control: exercise the sanitize stage */
 		const char *f = req->btf_features[i].p;
 		int feat = feat_of(f);
 		if (feat < 0)
@@ -411,9 +416,11 @@ int lb_check_features(const uint8_t *elf, size_t len, const struct bml_requireme
 				       "BTF feature %s: the check says %s but libbpf says %s %s — the prediction of the loader's rewrite cannot be trusted",
 				       f, v ? "accepted" : "not accepted", lb_feat_name(feat), lb ? "supported" : "missing");
 	}
-	
-
-
+	/* 2. Whether libbpf loads the BTF at all, and whether libbpf's sanitize really rewrites the ELF's BTF
+	 * (bpf_object__sanitize_btf; this copies the per-type rules of libbpf.c lines 3146-3244). Sanitize runs if any of 8
+	 * features is missing (btf_needs_sanitization), but if the BTF has no type that needs a missing feature, the copy is
+	 * byte-identical (for example FEAT_BTF_QMARK_DATASEC on 6.6). The guard stops on the predicted rewrite, and the byte
+	 * comparison after the load is the backstop. */
 	if (!feat_supported(NULL, LBF_BTF))
 		return lb_fail(r, BML_LOAD_SANITIZE, "libbpf says FEAT_BTF is missing — it would not load the BTF (B3)");
 	int rw = lb_btf_rewrite(elf, len);
@@ -422,15 +429,17 @@ int lb_check_features(const uint8_t *elf, size_t len, const struct bml_requireme
 			       lb_feat_name(rw));
 	if (rw == -2)
 		return lb_fail(r, BML_LOAD_SANITIZE, "the ELF BTF cannot be read to predict libbpf's rewrite");
-
+	/* 3. Rewrites of programs and maps (program and map attributes), and the replacement of helpers (when a program uses probe_read_{kernel,user}[_str]) */
 	static const int attr_feats[] = {LBF_PROG_NAME, LBF_GLOBAL_DATA, LBF_ARRAY_MMAP};
 	for (size_t i = 0; i < sizeof attr_feats / sizeof *attr_feats; i++)
 		if (!feat_supported(NULL, attr_feats[i]))
 			return lb_fail(r, BML_LOAD_REWRITE, "libbpf says %s is missing — it would change the programs or maps without saying so",
 				       lb_feat_name(attr_feats[i]));
-	
-
-
+	/* When FEAT_EXP_ATTACH_TYPE is missing, libbpf rewrites (sets expected_attach_type to 0) only programs whose section has a
+	 * SEC_EXP_ATTACH_OPT definition. libbpf's probe (a load of a cgroup_sock program) fails with EPERM when the process
+	 * lacks CAP_NET_ADMIN and is read as "missing"; stopping whatever the ELF contains would stop an fentry program run
+	 * with {bpf, perfmon} (this broke a downstream mojo program). So stop only when a matching section exists (and stop
+	 * if the ELF cannot be read: fail closed). */
 	if (!feat_supported(NULL, LBF_EXP_ATTACH_TYPE)) {
 		const char *hit = NULL;
 		struct bml_elf e;

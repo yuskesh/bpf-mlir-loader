@@ -1,3 +1,6 @@
+/* req/parse_v14.c — the tpbuf row of format version 14 (a port of parseTPBuffer in bpf-mlir's go/requirements/companion_v14.go).
+ * `tpbuf <program> i32` must be physically preceded by a generic attach row of the same program, `raw_tp_writable rawtp:<IDENT>`, and the
+ * program must be raw_tracepoint_writable / 24 (one such attach per program). The order is checked before the values. */
 #include "req/parse_internal.h"
 
 #include <stdint.h>

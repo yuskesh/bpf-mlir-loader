@@ -1,3 +1,4 @@
+/* Controls for BTF and recorded values that never call the kernel. This process owns the snapshot. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,15 +25,15 @@ static uint8_t *raw(size_t *len)
 int main(void)
 {
 	bml_buf_add(&strings, "", 1);
-	type("i32", 1u << 24, 4); u32(&types, 1u << 24 | 32);
-	type("", 2u << 24, 0);
-	type("E", 0x86000001, 4); u32(&types, str("NEG")); u32(&types, UINT32_MAX);
-	type("W", 19u << 24 | 1, 8); u32(&types, str("HIGH")); u32(&types, 2); u32(&types, 0x80000000);
-	type("S", 4u << 24 | 2, 16); u32(&types, str("p")); u32(&types, 2); u32(&types, 0); u32(&types, str("e")); u32(&types, 3); u32(&types, 64);
-	type("v", 14u << 24, 1); u32(&types, 1);
-	type(".data..percpu", 15u << 24 | 1, 4); u32(&types, 6); u32(&types, 0); u32(&types, 4);
-	type("", 13u << 24, 1); type("f", 12u << 24 | 1, 8);
-	type("S___noise", 4u << 24, 32); type("S___other", 4u << 24, 64);
+	type("i32", 1u << 24, 4); u32(&types, 1u << 24 | 32); /* 1 */
+	type("", 2u << 24, 0); /* 2: void* */
+	type("E", 0x86000001, 4); u32(&types, str("NEG")); u32(&types, UINT32_MAX); /* 3 */
+	type("W", 19u << 24 | 1, 8); u32(&types, str("HIGH")); u32(&types, 2); u32(&types, 0x80000000); /* 4 */
+	type("S", 4u << 24 | 2, 16); u32(&types, str("p")); u32(&types, 2); u32(&types, 0); u32(&types, str("e")); u32(&types, 3); u32(&types, 64); /* 5 */
+	type("v", 14u << 24, 1); u32(&types, 1); /* 6 */
+	type(".data..percpu", 15u << 24 | 1, 4); u32(&types, 6); u32(&types, 0); u32(&types, 4); /* 7 */
+	type("", 13u << 24, 1); type("f", 12u << 24 | 1, 8); /* 8,9 */
+	type("S___noise", 4u << 24, 32); type("S___other", 4u << 24, 64); /* 10,11 */
 	type("dup", 4u << 24, 8); type("dup", 4u << 24, 16);
 	type("___f", 12u << 24 | 1, 8); type("____f", 12u << 24 | 1, 8);
 	size_t len; uint8_t *bytes = raw(&len);
@@ -42,7 +43,7 @@ int main(void)
 	if (rc) return 1;
 	l.kernel_sources = calloc(1, sizeof(*l.kernel_sources));
 	if (!l.kernel_sources) return 1;
-	l.kernel_sources->modules_done = 1;
+	l.kernel_sources->modules_done = 1; /* no /sys read */
 	uint64_t value = 0;
 	CHECK(bml_live_enum_value(&l, "E", "NEG", &value, &msg) == BML_Q_OK && value == UINT64_MAX);
 	CHECK(bml_live_enum_value(&l, "W", "HIGH", &value, &msg) == BML_Q_OK && value == UINT64_C(0x8000000000000002));
@@ -69,10 +70,10 @@ int main(void)
 	CHECK(bml_live_kfields(&l, fields, 2, &diffs, &msg) == BML_Q_OK && !diffs.n); bml_strs_free(&diffs);
 	l.kernel_sources->modules_failed = 1; l.kernel_sources->module_error = strdup("module set unreadable");
 	CHECK(bml_live_struct_size(&l, "absent", &size, &msg) == BML_Q_UNKNOWN); free(msg); msg = NULL;
-	CHECK(bml_live_struct_size(&l, "S", &size, &msg) == BML_Q_OK && size == 16);
+	CHECK(bml_live_struct_size(&l, "S", &size, &msg) == BML_Q_OK && size == 16); /* presence survives incomplete modules */
 	CHECK(bml_live_fib_flags(&l, "sched_cls", 3, 0, &present, &msg) == BML_Q_UNKNOWN); free(msg); msg = NULL;
 	CHECK(bml_live_fib_flags(&l, "xdp", 6, 2, &present, &msg) == BML_Q_UNKNOWN); free(msg); msg = NULL;
-
+	/* A split module uses the base's INT id and global string offsets; own lookup excludes base names. */
 	bml_buf_free(&types); bml_buf_free(&strings); string_base = l.kb.strs_len;
 	type("module_var", 14u << 24, 1); u32(&types, 1);
 	bytes = raw(&len);

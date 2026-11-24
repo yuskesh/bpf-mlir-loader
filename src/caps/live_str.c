@@ -1,3 +1,7 @@
+/* caps/live_str.c — the char pointer depth of the strptr and strarray types of tpfield and sysarg. It is a C port of kload's
+ * tpFieldName, tpCharPointerDepth (v11.go), syscallCharPointerDepth and syscallBTFCharPointerDepth (v13.go).
+ * Depth 1 is strptr and depth 2 is strarray. A known non-char type has depth 0 or -1; a declaration that cannot be read, and an
+ * alias, are not known (Unknown, which stops the load). */
 #include "caps/live_internal.h"
 #include "btf/kernel_values.h"
 
@@ -8,13 +12,13 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* the regular expression \s (RE2; it does not include \v) */
 static int re_space(char c)
 {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
 }
 
-
+/* the separators of strings.Fields (the ASCII part of unicode.IsSpace) */
 static int go_space(char c)
 {
 	return re_space(c) || c == '\v';
@@ -41,7 +45,7 @@ int lv_tp_field_name(const char *d, size_t n, size_t *s, size_t *e)
 		size_t k = j;
 		while (k < n && re_space(d[k]))
 			k++;
-		if (k < n && d[k] == ')')
+		if (k < n && d[k] == ')') /* \s*\)?\s*(?:\[[^]]*\]\s*)*$ (an earlier version accepted only one [..]) */
 			k++;
 		while (k < n && re_space(d[k]))
 			k++;
@@ -91,7 +95,7 @@ int lv_tp_char_depth(const char *decl, size_t n, int *depth)
 	size_t ns, ne;
 	if (!lv_tp_field_name(decl, n, &ns, &ne))
 		return 0;
-
+	/* strings.Fields(strings.ReplaceAll(decl[:ns], "*", " * ")): * is a token of its own */
 	int d = 0, nbase = 0, only_char = 1, all_c = 1;
 	for (size_t i = 0; i < ns;) {
 		if (go_space(decl[i])) {
@@ -125,8 +129,8 @@ int lv_tp_char_depth(const char *decl, size_t n, int *depth)
 	return all_c && nbase > 0;
 }
 
-
-
+/* tpByteArrayShape: the element count of a fixed byte array (*count; 0 if it is certainly not an array) and the explicit sign (*sign:
+ * 'u' or 'i', and 0 for char, which follows the numeric Signed). 1 means known; 0 means a declaration that cannot be read or an unknown type (Unknown). */
 int lv_tp_array_shape(const char *decl, size_t n, int64_t *count, char *sign)
 {
 	*count = 0, *sign = 0;
@@ -144,7 +148,7 @@ int lv_tp_array_shape(const char *decl, size_t n, int64_t *count, char *sign)
 	size_t ns, ne;
 	if (!lv_tp_field_name(decl, n, &ns, &ne))
 		return 0;
-
+	/* strings.Join(strings.Fields(d[:loc[2]]) without const and volatile, " ") */
 	char base[64];
 	size_t bl = 0;
 	for (size_t i = 0; i < ns;) {
@@ -159,7 +163,7 @@ int lv_tp_array_shape(const char *decl, size_t n, int64_t *count, char *sign)
 		if (tok_is(decl + st, k, "const") || tok_is(decl + st, k, "volatile"))
 			continue;
 		if (bl + k + 2 > sizeof base)
-			return 0;
+			return 0; /* longer than any spelling in the table: the default (Unknown) */
 		if (bl)
 			base[bl++] = ' ';
 		memcpy(base + bl, decl + st, k);
@@ -186,7 +190,7 @@ int lv_tp_array_shape(const char *decl, size_t n, int64_t *count, char *sign)
 		*sign = 0;
 		return 0;
 	}
-
+	/* tail := strings.TrimSpace(d[loc[3]:]) */
 	const char *t = decl + ne;
 	size_t tn = n - ne;
 	while (tn && go_space(*t))
@@ -227,7 +231,7 @@ int lv_sys_btf_char_depth(const struct bml_kbtf *kb, uint32_t id, int *depth)
 		case KBTF_INT:
 			*depth = !strcmp(t.name, "char") && t.size_type == 1 ? d : -1;
 			return 1;
-		case KBTF_UNKN:
+		case KBTF_UNKN: /* id 0 — Void */
 		case KBTF_STRUCT:
 		case KBTF_UNION:
 		case KBTF_ENUM:
@@ -245,7 +249,7 @@ int lv_sys_btf_char_depth(const struct bml_kbtf *kb, uint32_t id, int *depth)
 
 int lv_sys_char_depth(const struct bml_kbtf *kb, const char *typ, int *depth)
 {
-
+	/* remove __user, make * a token of its own, and join the tokens */
 	struct bml_buf w = {0}, base = {0};
 	int stars = 0;
 	for (const char *p = typ; *p;) {

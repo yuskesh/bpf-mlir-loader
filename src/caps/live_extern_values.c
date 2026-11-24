@@ -1,3 +1,4 @@
+/* Matches ksymvar, type and field presence, and kstructsize against vmlinux and the set of modules. */
 #include "caps/value_sources.h"
 #include "caps/live_internal.h"
 

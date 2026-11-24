@@ -1,3 +1,5 @@
+// cmd/bml-precheck/flags.c — flag parsing (following the rules of Go's flag package), the comparison of loader
+// declarations, and reading --loader-file. Split out of main.c.
 #include "bml-precheck/precheck.h"
 
 #include <errno.h>
@@ -11,7 +13,8 @@
 #include "json/json.h"
 #include "req/from_elf.h"
 
-
+/* Whether two declarations are equal in the sense of Go's reflect.DeepEqual: a nil map and an empty map are
+ * different, and the contents of a map are compared as a set. */
 static int kv_equal(const struct bml_kv *a, size_t na, int ha, const struct bml_kv *b, size_t nb, int hb)
 {
 	if (ha != hb || na != nb)
@@ -36,7 +39,8 @@ int pc_decl_equal(const struct bml_loader_decl *a, const struct bml_loader_decl 
 	       kv_equal(a->kprobe_alias_prefix, a->n_kprobe_alias_prefix, a->has_kprobe_alias_prefix, b->kprobe_alias_prefix,
 			b->n_kprobe_alias_prefix, b->has_kprobe_alias_prefix) &&
 	       kv_equal(a->btf_rewrite, a->n_btf_rewrite, a->has_btf_rewrite, b->btf_rewrite, b->n_btf_rewrite, b->has_btf_rewrite) &&
-
+	       /* As the Go reference's sameLoader does for the keys added with USDT and later attach kinds: a key that the
+		* recorded declaration (a) does not carry is not compared against the other declaration's value. */
 	       same_or_absent(a->usdt_attach, b->usdt_attach) && same_or_absent(a->sockmap_attach, b->sockmap_attach) &&
 	       same_or_absent(a->lsm_cgroup_load, b->lsm_cgroup_load) && same_or_absent(a->fsession_load, b->fsession_load) &&
 	       same_or_absent(a->ksyscall_attach, b->ksyscall_attach);
@@ -56,7 +60,7 @@ static const char **str_flag(struct flags *f, const char *n)
 	if (!strcmp(n, "requirements")) return &f->requirements;
 	if (!strcmp(n, "maps")) return &f->maps;
 	if (!strcmp(n, "record")) return &f->record;
-	if (!strcmp(n, "load-as")) return &f->load_as;
+	if (!strcmp(n, "load-as")) return &f->load_as; /* --load-as: the privilege the load will run with (valid with --caps only) */
 	return NULL;
 }
 
@@ -109,7 +113,7 @@ int pc_parse_flags(int argc, char **argv, struct flags *f, struct bml_buf *err)
 		}
 		const char **dst = str_flag(f, name);
 		int binary = !strcmp(name, "binary"), ext = !strcmp(name, "ext-target"), debug = !strcmp(name, "debug");
-		if (!strcmp(name, "debug-root"))
+		if (!strcmp(name, "debug-root")) /* --debug-root: where separate debug files are searched; remember that the flag was given */
 			dst = &f->debug_root, f->debug_root_set = 1;
 		if (!dst && !binary && !ext && !debug) {
 			bml_buf_addf(err, "flag provided but not defined: -%s", name);
@@ -162,7 +166,7 @@ int pc_load_loader_file(const char *path, struct bml_loader_decl *d, char **err)
 		*err = m;
 		return -1;
 	}
-
+	/* As in Go: DecodeStrictJSON(LoaderJSON) (section 13 of the specification), then a check that name is not empty. */
 	char *e = NULL;
 	int rc = bml_loader_decl_parse(data, len, d, &e, NULL);
 	free(data);
@@ -179,7 +183,7 @@ int pc_load_loader_file(const char *path, struct bml_loader_decl *d, char **err)
 		*err = bml_buf_take(&m);
 		return -1;
 	}
-	char *ve = NULL;
+	char *ve = NULL; /* The Go reference's LoaderJSON.Validate, which checks the value of usdt_attach. */
 	if (bml_loader_decl_validate(d, &ve)) {
 		bml_buf_addf(&m, "loader file %s: %s", path, ve ? ve : "");
 		free(ve);

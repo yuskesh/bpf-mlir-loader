@@ -1,3 +1,18 @@
+/* abi/attach_wave1.c — attach to kernel objects for the first wave of program kinds: fmod_ret, raw_tp,
+ * iter, and the iterator fd / read-all entries (kretprobe is in trace.c and uretprobe in uprobe.c).
+ * The discipline is the same as for the other attach entries: the kind comes from libbpf's program
+ * type and expected attach type, the target from the attach row of the requirements (the declaration
+ * checked before load), and after the attach the kernel's link info is compared with the declaration;
+ * a mismatch, or a link info that cannot be read, detaches the link and returns BML_OTHER.
+ * - fmod_ret: the attach type in the tracing link's info must be MODIFY_RETURN, and target_btf_id must
+ *   be the id of FUNC <fn> in vmlinux BTF (read by bml itself, independently of libbpf).
+ * - raw_tp: attach with the declared tracepoint given explicitly (not relying on the section name),
+ *   then compare tp_name in the raw tracepoint link's info.
+ * - iter: creates the link (the map fd belongs to the caller, because the target is an fd by design).
+ *   The link info's target_name (and map_id, if a map was passed) is compared. bml_iter_open returns
+ *   the iterator fd; the caller does read(2) and close, and bml does not remember it. bml_iter_read reads
+ *   everything into a buffer and, if the buffer is too small, returns BML_VALUE_RANGE instead of
+ *   truncating. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -17,7 +32,7 @@ static int str_is(const struct bml_str *s, const char *lit)
 	return s->len == strlen(lit) && memcmp(s->p, lit, s->len) == 0;
 }
 
-
+/* Whether the bml_str contains no NUL. */
 static int clean(const struct bml_str *s)
 {
 	return s->len > 0 && strlen(s->p) == s->len;
@@ -46,7 +61,7 @@ static int link_info(int fd, struct bpf_link_info *info)
 	return bpf_link_get_info_by_fd(fd, info, &len) != 0 ? -errno : 0;
 }
 
-
+/* ---- fmod_ret ---- */
 static int64_t attach_fmod_ret_body(int64_t obj, const char *prog, int64_t len)
 {
 	int64_t e;
@@ -57,7 +72,7 @@ static int64_t attach_fmod_ret_body(int64_t obj, const char *prog, int64_t len)
 	const char *name = bpf_program__name(p);
 	if (bpf_program__type(p) != BPF_PROG_TYPE_TRACING || bpf_program__expected_attach_type(p) != BPF_MODIFY_RETURN)
 		return wrong_kind(o, p, "fmod_ret");
-
+	/* The target function: from the newer trace_fmod_ret <fn> row or the older generic modify_return func:<fn> row. */
 	const struct bml_attach *a = attach_row(o, name);
 	const struct bml_str *fn = NULL;
 	if (a && str_is(&a->attach_type, "trace_fmod_ret"))
@@ -80,7 +95,7 @@ static int64_t attach_fmod_ret_body(int64_t obj, const char *prog, int64_t len)
 	struct bpf_link_info info;
 	memset(&info, 0, sizeof info);
 	int rc = link_info(bpf_link__fd(l), &info);
-	if (rc == 0 && BML_MUT("attach.fmodret_btf_other"))
+	if (rc == 0 && BML_MUT("attach.fmodret_btf_other")) /* a mutation that tries the form where the kernel attached to another function */
 		info.tracing.target_btf_id = want + 1;
 	if (rc != 0) {
 		bpf_link__destroy(l);
@@ -99,7 +114,7 @@ static int64_t attach_fmod_ret_body(int64_t obj, const char *prog, int64_t len)
 	return abi_link_put(l);
 }
 
-
+/* ---- raw_tp ---- */
 static int64_t attach_raw_tp_body(int64_t obj, const char *prog, int64_t len)
 {
 	int64_t e;
@@ -140,7 +155,7 @@ static int64_t attach_raw_tp_body(int64_t obj, const char *prog, int64_t len)
 	return abi_link_put(l);
 }
 
-
+/* ---- iter ---- */
 static int64_t attach_iter_body(int64_t obj, const char *prog, int64_t len, int64_t map_fd)
 {
 	int64_t e;
@@ -204,7 +219,7 @@ static int64_t attach_iter_body(int64_t obj, const char *prog, int64_t len, int6
 	return abi_link_put(l);
 }
 
-
+/* A new iterator fd of a link (the caller closes it). For a link that is not an iter, a STATE result is stored in *err and -1 returned. */
 static int iter_create(int64_t link, int64_t *err)
 {
 	int lfd = abi_link_dup_fd(link, err);
@@ -259,7 +274,7 @@ int64_t bml_iter_read(int64_t link, uint8_t *buf, int64_t cap)
 		}
 		if (r == 0)
 			break;
-		if (n >= cap) {
+		if (n >= cap) { /* there is still more beyond the buffer: do not truncate */
 			close(fd);
 			if (BML_MUT("attach.iter_read_truncate"))
 				return abi_ok(n);

@@ -1,3 +1,10 @@
+/* dwarf/open.c — a copy of Go's debug/elf File.DWARF() (reading and decompressing sections) and of debug/dwarf New,
+ * parseUnits and parseAbbrev.
+ *
+ * Differences from Go (on the fail-closed side: the DWARF is treated as unreadable, giving uprobearg_unknown):
+ * zstd-compressed SHF_COMPRESSED sections (Go inflates them; this library links only zlib); relocations that point
+ * at debug sections in a file that is not ET_EXEC (Go applies them; an executable has none); and errors in the type
+ * units of .debug_types (Go reads them through AddTypes; this code does not). */
 #include "dwarf/internal.h"
 
 #include <stdio.h>
@@ -17,7 +24,7 @@ static int ferr(char **err, const char *fmt, const char *a)
 	return -1;
 }
 
-
+/* Inflate a zlib stream to want bytes (malloc'd) */
 static uint8_t *inflate_all(const uint8_t *src, size_t n, uint64_t want, char **err)
 {
 	if (want > (1ull << 32)) {
@@ -48,11 +55,11 @@ static uint8_t *inflate_all(const uint8_t *src, size_t n, uint64_t want, char **
 	return out;
 }
 
-
+/* Go's Section.Data (including decompression). owned receives the decompressed or zero-filled buffers (the caller owns them). */
 static int section_data(const struct bml_elf *e, const struct bml_elf_shdr *s, struct dw_sect *out, uint8_t **owned, char **err)
 {
 	*owned = NULL;
-	if (s->type == BML_SHT_NOBITS) {
+	if (s->type == BML_SHT_NOBITS) { /* Go returns zeros */
 		if (s->size > (1ull << 30))
 			return ferr(err, "section %s is too large", s->name);
 		*owned = calloc(1, s->size ? s->size : 1);
@@ -83,7 +90,7 @@ static int section_data(const struct bml_elf *e, const struct bml_elf_shdr *s, s
 		out->n = (size_t)size;
 		return 0;
 	}
-	if (!strncmp(s->name, ".zdebug", 7) && n >= 12 && !memcmp(raw, "ZLIB", 4)) {
+	if (!strncmp(s->name, ".zdebug", 7) && n >= 12 && !memcmp(raw, "ZLIB", 4)) { /* the old form: "ZLIB" followed by an 8-byte big-endian size */
 		uint64_t size = 0;
 		for (int i = 4; i < 12; i++)
 			size = size << 8 | raw[i];
@@ -104,7 +111,7 @@ static const char *suffix(const char *name)
 	return !strncmp(name, ".debug_", 7) ? name + 7 : !strncmp(name, ".zdebug_", 8) ? name + 8 : NULL;
 }
 
-
+/* Go's parseAbbrev (including the check of form classes for each unit version; an unknown form is an error) */
 static int known_form(uint64_t f)
 {
 	return (f >= 0x01 && f <= 0x2c && f != 0x02) || f == 0x1f20 || f == 0x1f21;
@@ -150,7 +157,7 @@ static struct dw_atable *parse_abbrev(struct dw *d, uint64_t off, char **err)
 			break;
 		}
 		t.a = na;
-		t.a[t.n++] = a;
+		t.a[t.n++] = a; /* for a repeated id the later entry wins: the lookup searches from the back (as a Go map overwrites) */
 	}
 	if (b.err) {
 		*err = b.err;
@@ -175,7 +182,7 @@ static struct dw_atable *parse_abbrev(struct dw *d, uint64_t off, char **err)
 	return p;
 }
 
-
+/* Go's dwarf.New (detecting the byte order) and parseUnits */
 static int parse_units(struct dw *d, char **err)
 {
 	const uint8_t *in = d->info.p;
@@ -195,7 +202,7 @@ static int parse_units(struct dw *d, char **err)
 	if (x != 0 && y != 0)
 		return ferr(err, "decoding dwarf section info at offset 0x4: cannot determine byte order%s", NULL);
 	d->big = x == 0;
-
+	/* first pass: count */
 	struct dw_buf b;
 	size_t cnt = 0;
 	dw_buf_init(&b, d, NULL, "info", 0, in, n);
@@ -220,7 +227,7 @@ static int parse_units(struct dw *d, char **err)
 	d->u = calloc(cnt ? cnt : 1, sizeof *d->u);
 	if (!d->u)
 		return ferr(err, "out of memory%s", NULL);
-
+	/* second pass: record */
 	dw_buf_init(&b, d, NULL, "info", 0, in, n);
 	for (size_t i = 0; i < cnt; i++) {
 		struct dw_unit *u = &d->u[i];
@@ -262,9 +269,9 @@ static int parse_units(struct dw *d, char **err)
 		}
 		if (vers < 5)
 			u->asize = dw_u8(&b);
-		if (u->utype == 4 || u->utype == 5)
+		if (u->utype == 4 || u->utype == 5) /* DW_UT_skeleton, split_compile: the unit id */
 			dw_u64(&b);
-		else if (u->utype == 2 || u->utype == 6) {
+		else if (u->utype == 2 || u->utype == 6) { /* DW_UT_type, split_type: the signature and the type offset */
 			dw_u64(&b);
 			if (u->is64)
 				dw_u64(&b);
@@ -286,14 +293,14 @@ int dw_open(const struct bml_elf *elf, struct dw *d, char **err)
 {
 	memset(d, 0, sizeof *d);
 	*err = NULL;
-	for (size_t i = 0; i < elf->n_sections; i++) {
+	for (size_t i = 0; i < elf->n_sections; i++) { /* Go: unless the file is ET_EXEC, apply the relocations that point at debug sections */
 		const struct bml_elf_shdr *r = &elf->sections[i];
-		if (elf->type != 2               && (r->type == BML_SHT_REL || r->type == 4               ) && r->info < elf->n_sections &&
+		if (elf->type != 2 /* ET_EXEC */ && (r->type == BML_SHT_REL || r->type == 4 /* SHT_RELA */) && r->info < elf->n_sections &&
 		    suffix(elf->sections[r->info].name))
 			return ferr(err, "relocations of the DWARF section %s are not supported (bpf-mlir-loader reads linked binaries)",
 				    elf->sections[r->info].name);
 	}
-
+	/* Go reads every .debug_* and .zdebug_* section (a decompression error is a DWARF error); for the six sections it knows, the later one wins */
 	for (size_t i = 0; i < elf->n_sections; i++) {
 		const struct bml_elf_shdr *s = &elf->sections[i];
 		const char *sfx = suffix(s->name);

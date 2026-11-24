@@ -1,3 +1,6 @@
+/* caps/live_map.c — a C port of map_type (features.HaveMapType) and map_field (kload's mapfield.go). Map creation follows cilium's
+ * createMap: it makes a BTF handle, goes without BTF when haveMapBTF reports NotSupported, and retries once without BTF on EINVAL
+ * or ENOTSUPP. */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -30,7 +33,7 @@ static int map_type_attrs(uint32_t t, struct mt *m)
 	case BPF_MAP_TYPE_STACK_TRACE: m->value = 8; break;
 	case BPF_MAP_TYPE_LPM_TRIE: m->key = 8; m->value = 8; m->flags = BPF_F_NO_PREALLOC; break;
 	case BPF_MAP_TYPE_ARRAY_OF_MAPS: case BPF_MAP_TYPE_HASH_OF_MAPS: m->inner_fd = 0xffffffffu; m->ebadf_ok = 1; break;
-	case BPF_MAP_TYPE_CGROUP_STORAGE: case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE: m->key = 16; m->max = 0; break;
+	case BPF_MAP_TYPE_CGROUP_STORAGE: case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE: m->key = 16; m->max = 0; break; /* 8 + sizeof(int), where int is Go's int (x86_64) */
 	case BPF_MAP_TYPE_QUEUE: case BPF_MAP_TYPE_STACK: m->key = 0; break;
 	case BPF_MAP_TYPE_SK_STORAGE: case BPF_MAP_TYPE_INODE_STORAGE: case BPF_MAP_TYPE_TASK_STORAGE: case BPF_MAP_TYPE_CGRP_STORAGE:
 		m->max = 0;
@@ -76,7 +79,7 @@ int bml_live_map_type(struct bml_live *l, int64_t id, int *out, char **msg)
 	uint32_t t = (uint32_t)id;
 	int st;
 	*out = 0;
-	if ((t == 0 || t > 33) && !BML_MUT("live.nofeature_text_old")) {
+	if ((t == 0 || t > 33) && !BML_MUT("live.nofeature_text_old")) { /* cilium's haveMapTypeMatrix has no key for it: "no feature probe for %v" */
 		struct bml_buf b = {0};
 		if (t == 0)
 			bml_buf_adds(&b, "no feature probe for UnspecifiedMap");
@@ -96,15 +99,15 @@ int bml_live_map_type(struct bml_live *l, int64_t id, int *out, char **msg)
 	*out = st == LV_OK;
 	if (st == LV_OK || st == LV_NOTSUP)
 		return BML_Q_OK;
-	
-
+	/* kload.go's HasMapType calls features.HaveMapType, and cilium's FeatureTest reports `detect support for <String of the MapType>: <errno>`
+	 * for an errno other than EINVAL or E2BIG (for example EPERM in a process without privilege). The names are 0 to 33 of types_string.go in cilium v0.22. */
 	static const char *const mt_names[34] = {
 		"UnspecifiedMap", "Hash", "Array", "ProgramArray", "PerfEventArray", "PerCPUHash", "PerCPUArray", "StackTrace", "CGroupArray",
 		"LRUHash", "LRUCPUHash", "LPMTrie", "ArrayOfMaps", "HashOfMaps", "DevMap", "SockMap", "CPUMap", "XSKMap", "SockHash",
 		"CGroupStorage", "ReusePortSockArray", "PerCPUCGroupStorage", "Queue", "Stack", "SkStorage", "DevMapHash", "StructOpsMap",
 		"RingBuf", "InodeStorage", "TaskStorage", "BloomFilter", "UserRingbuf", "CgroupStorage", "Arena",
 	};
-
+	/* an error of probe_map_type is -errno (EPERM is -1, so t is examined too, to tell it from the st = -1 of the out-of-range-t mutation) */
 	char *e = st < 0 && t >= 1 && t <= 33 && !BML_MUT("live.attach_target_errno") ? bml_go_errno_str(-st) : NULL;
 	if (e) {
 		struct bml_buf b = {0};
@@ -116,7 +119,7 @@ int bml_live_map_type(struct bml_live *l, int64_t id, int *out, char **msg)
 	return BML_Q_ERROR;
 }
 
-
+/* the BTF of the map_field map (the output of cilium's MarshalMapKV: the key u32 is id 1 and the value struct mf_val is id 2) */
 static const char *const mf_btf[2][2] = {
 	{"9feb01001800000000000000440000004400000010000000010000000000000104000000200000000500000002000004080000000c00000003000000000000000e00000003000000200000000100000000000001040000002000000000753332006d665f76616c0066006100",
 	 "9feb010018000000000000005c0000005c00000022000000010000000000000104000000200000000500000002000004080000000c00000004000000000000000e0000000300000020000000010000000000000104000000200000001000000001000004040000001e000000030000000000000000753332006d665f76616c00660061006270665f7370696e5f6c6f636b0076616c00"},
@@ -134,18 +137,18 @@ static size_t unhex(const char *h, uint8_t *out, size_t cap)
 	return n;
 }
 
-
+/* ebpf.NewMap (Array, key size 4, max 1, key BTF u32 and the value BTF): returns an fd on success and -1 on failure */
 static int field_map(struct bml_live *l, const char *name, uint32_t value_size, const char *btf_hex, char **why)
 {
 	uint8_t btf[256];
 	size_t n = unhex(btf_hex, btf, sizeof btf);
 	struct lv_kmo o;
-	lv_kmo(l, &o);
+	lv_kmo(l, &o); /* NewHandle marshals with KernelMarshalOptions (this BTF has no type that would be rewritten) */
 	struct lv_res r;
 	int btf_fd = lv_btf_handle_reason(l, btf, n, &r);
 	if (btf_fd < 0) {
 		int mb = lv_feat(l, LVF_MAP_BTF);
-		if (mb != LV_NOTSUP) {
+		if (mb != LV_NOTSUP) { /* preserve failure of MarshalMapKV/NewHandle */
 			char *e=mb==LV_OK?(r.text?strdup(r.text):NULL):bml_go_errno_str(mb<-1?-mb:0);
 			if(e){
 				if(mb==LV_OK)asprintf(why,"creating map: load BTF: %s",e);
@@ -166,7 +169,7 @@ static int field_map(struct bml_live *l, const char *name, uint32_t value_size, 
 		memcpy(attr + 48, b, sizeof b);
 	}
 	int fd = lv_bpf(BPF_MAP_CREATE, attr, sizeof attr);
-	if (fd < 0 && (fd == -ENOTSUPP || fd == -EINVAL) && btf_fd >= 0) {
+	if (fd < 0 && (fd == -ENOTSUPP || fd == -EINVAL) && btf_fd >= 0) { /* retry once without BTF */
 		memset(attr + 48, 0, 12);
 		fd = lv_bpf(BPF_MAP_CREATE, attr, sizeof attr);
 	}

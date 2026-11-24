@@ -1,3 +1,4 @@
+/* btf/layout.c — a copy of parseBTF, resolve, spell and BTFRecords of go/layout. Split out of mapdecl.c; see the comment in btf/layout.h. */
 #include "btf/layout.h"
 
 
@@ -44,10 +45,10 @@ static uint32_t le32(const uint8_t *p)
 	return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-
+/* Unreachable after the bounds checks (a defensive message in the C code; Go has no such message) */
 #define PANIC_MSG "the ELF BTF is corrupt (a read past its data — bpf-mlir-loader stops here)"
 
-
+/* Go's le.Uint32(raw[off:]); Go panics if raw[off:] is shorter than 4 bytes */
 static int rd32(const uint8_t *raw, size_t len, uint32_t off, uint32_t *out)
 {
 	if ((uint64_t)off + 4 > len)
@@ -56,7 +57,7 @@ static int rd32(const uint8_t *raw, size_t len, uint32_t off, uint32_t *out)
 	return 0;
 }
 
-
+/* str(off): off >= len(strs) gives ""; a name without a NUL makes Go panic */
 static int lstr(const uint8_t *strs, size_t slen, uint32_t off, const char **out)
 {
 	if (off >= slen) {
@@ -69,14 +70,14 @@ static int lstr(const uint8_t *strs, size_t slen, uint32_t off, const char **out
 	return 0;
 }
 
-
+/* The length that follows a type record's 12-byte header (Go's btfRecordTail) */
 static uint64_t record_tail(uint32_t kind, uint32_t vlen)
 {
 	switch (kind) {
-	case 1: case 14: case 17: return 4;
-	case 3: return 12;
-	case 4: case 5: case 19: case 15: return 12ull * vlen;
-	case 6: case 13: return 8ull * vlen;
+	case 1: case 14: case 17: return 4;         /* INT, VAR, DECL_TAG */
+	case 3: return 12;                          /* ARRAY */
+	case 4: case 5: case 19: case 15: return 12ull * vlen; /* STRUCT, UNION, ENUM64, DATASEC */
+	case 6: case 13: return 8ull * vlen;        /* ENUM, FUNC_PROTO */
 	}
 	return 0;
 }
@@ -105,7 +106,7 @@ int btf_layout_parse(const void *elf_data, size_t elf_len, struct lbtf *b, char 
 		goto out;
 	}
 	uint32_t hdr = le32(raw + 4), toff = le32(raw + 8), tlen = le32(raw + 12), soff = le32(raw + 16), sl = le32(raw + 20);
-
+	/* Bounds checks (added in bpf-mlir v0.13.0): ranges are computed in uint64, they must lie inside the section, and the string table must end with NUL. The messages are Go's, byte for byte. */
 	uint64_t n = len;
 	if ((uint64_t)hdr < 24 || (uint64_t)hdr > n || (uint64_t)hdr + toff + tlen > n || (uint64_t)hdr + soff + sl > n) {
 		*err = fmts("the .BTF is corrupt: the header (length %u, types %u+%u, strings %u+%u) is outside the %llu-byte section", hdr,
@@ -156,7 +157,7 @@ int btf_layout_parse(const void *elf_data, size_t elf_len, struct lbtf *b, char 
 		int kflag = info >> 31 == 1;
 		p += 12;
 		switch (t.kind) {
-		case 1: case 14: case 17:
+		case 1: case 14: case 17: /* INT, VAR, DECL_TAG */
 			t.size = st;
 			if (t.kind == 14)
 				t.type_id = st;
@@ -170,7 +171,7 @@ int btf_layout_parse(const void *elf_data, size_t elf_len, struct lbtf *b, char 
 			}
 			p += 4;
 			break;
-		case 3: {
+		case 3: { /* ARRAY */
 			uint32_t e0, e2;
 			if (rd32(raw, len, p, &e0) || rd32(raw, len, p + 8, &e2)) {
 				*err = xstrdup(PANIC_MSG);
@@ -181,7 +182,7 @@ int btf_layout_parse(const void *elf_data, size_t elf_len, struct lbtf *b, char 
 			p += 12;
 			break;
 		}
-		case 4: case 5:
+		case 4: case 5: /* STRUCT, UNION */
 			t.size = st;
 			if (vlen) {
 				t.members = calloc(vlen, sizeof(*t.members));
@@ -209,15 +210,15 @@ int btf_layout_parse(const void *elf_data, size_t elf_len, struct lbtf *b, char 
 			}
 			p += 12 * vlen;
 			break;
-		case 6:
+		case 6: /* ENUM */
 			t.size = st;
 			p += 8 * vlen;
 			break;
-		case 19:
+		case 19: /* ENUM64 */
 			t.size = st;
 			p += 12 * vlen;
 			break;
-		case 15:
+		case 15: /* DATASEC: var_secinfo (used by the globals check; Go panics outside the raw range) */
 			t.size = st;
 			if (vlen) {
 				t.secinfo = calloc(vlen, sizeof(*t.secinfo));
@@ -239,7 +240,7 @@ int btf_layout_parse(const void *elf_data, size_t elf_len, struct lbtf *b, char 
 			}
 			p += 12 * vlen;
 			break;
-		case 13:
+		case 13: /* FUNC_PROTO */
 			p += 8 * vlen;
 			break;
 		case 2: case 8: case 9: case 10: case 11: case 18: case 7: case 12: case 16:
@@ -285,7 +286,7 @@ out:
 	return rc;
 }
 
-
+/* parse already rejects two STRUCTs with the same name, so there is at most one STRUCT per name */
 static const struct ltype *find_struct(const struct lbtf *b, const char *name)
 {
 	for (size_t i = 0; i < b->n; i++)
@@ -335,7 +336,7 @@ static void spell(const struct lbtf *b, uint32_t id, struct bml_buf *o, int dept
 	case 5:
 		bml_buf_adds(o, "?union");
 		return;
-	case 2: {
+	case 2: { /* from bpf-mlir's kptr support, kptrTarget: PTR -> TYPE_TAG "kptr" (not stripped) -> a named STRUCT is spelled kptr:<name> */
 		const struct ltype *s = NULL;
 		if (t->type_id < b->n && b->t[t->type_id].kind == 18 && !strcmp(b->t[t->type_id].name, "kptr") && !BML_MUT("maps.kptr_as_pointer"))
 			s = btf_layout_resolve(b, b->t[t->type_id].type_id);
@@ -362,7 +363,7 @@ static int cmp_indexed(const void *a, const void *b)
 
 char *btf_shape_string(uint32_t size, struct btf_indexed *ms, size_t n)
 {
-	qsort(ms, n, sizeof(*ms), cmp_indexed);
+	qsort(ms, n, sizeof(*ms), cmp_indexed); /* idx keeps the order of equal offsets (sort.SliceStable) */
 	struct bml_buf b = {0};
 	bml_buf_addf(&b, "size=%u;", size);
 	for (size_t i = 0; i < n; i++)
@@ -370,7 +371,7 @@ char *btf_shape_string(uint32_t size, struct btf_indexed *ms, size_t n)
 	return bml_buf_take(&b);
 }
 
-
+/* BTFRecords lookup: the table string (malloc'd), or NULL with *missing set if there is none */
 char *btf_layout_record(const struct lbtf *b, const char *name, int *missing)
 {
 	*missing = 0;

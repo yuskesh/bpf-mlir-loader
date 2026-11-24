@@ -1,3 +1,13 @@
+/* abi/attach_caller.c — attach to a target the caller names. A cgroup (cgroup_skb) or a network
+ * namespace (sk_lookup, flow_dissector) gets a BPF_LINK_CREATE on the caller's fd; a socket_filter gets
+ * SO_ATTACH_BPF on the caller's socket (which the caller asks for, and which changes process state) or
+ * the program fd is returned.
+ * bml never opens the target path: it uses the caller's fd, which avoids the mix-up that can happen when
+ * a path is reopened and names another file (whether a reopened path reads the replaced file depends on the file system; it was observed over 9p). Before the attach it checks what the fd is (a cgroup v2
+ * directory, an nsfs net namespace, or a socket); after the attach it compares the target in the link
+ * info (cgroup_id or netns_ino) with the inode of the fd it was given. A mismatch, or a link info that
+ * cannot be read, detaches the link and returns BML_OTHER, the same discipline as the other attach
+ * entries. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -27,7 +37,7 @@ static int64_t wrong_kind(struct abi_object *o, struct bpf_program *p, const cha
 			kind);
 }
 
-
+/* What the fd is: 'c' is a cgroup v2 directory, 'n' a net namespace, 's' a socket. 0 is good (with *ino); anything else is a BML_OTHER result. */
 static int64_t check_fd(int64_t fd, char want, const char *what, uint64_t *ino)
 {
 	if (fd < 0 || fd > INT32_MAX)
@@ -36,7 +46,7 @@ static int64_t check_fd(int64_t fd, char want, const char *what, uint64_t *ino)
 	if (fstat((int)fd, &st) != 0)
 		return abi_fail(BML_OTHER, "bml: the %s fd %lld: %s", what, (long long)fd, abi_errno(errno));
 	*ino = (uint64_t)st.st_ino;
-	if (BML_MUT("attach.fd_kind_skip"))
+	if (BML_MUT("attach.fd_kind_skip")) /* mutation: do not check what the fd is (leave it to the kernel's error message) */
 		return 0;
 	struct statfs sf;
 	const char *bad = NULL;
@@ -56,7 +66,7 @@ static int64_t check_fd(int64_t fd, char want, const char *what, uint64_t *ino)
 	return 0;
 }
 
-
+/* Reads the link info and compares the target (cgroup_id or netns_ino, by type) and the attach type. 0 is a match; anything else is a BML_OTHER result with the link already detached. */
 static int64_t confirm(struct bpf_link *l, const char *name, const char *kind, uint32_t want_type, uint32_t want_at, uint64_t want_ino)
 {
 	struct bpf_link_info info;
@@ -157,7 +167,7 @@ static int64_t program_fd_body(int64_t obj, const char *prog, int64_t len)
 	struct bpf_program *p;
 	if (!o || (e = abi_program(o, prog, len, &p)))
 		return e;
-	if (bpf_program__type(p) != BPF_PROG_TYPE_SOCKET_FILTER)
+	if (bpf_program__type(p) != BPF_PROG_TYPE_SOCKET_FILTER) /* do not widen the attach entry beyond what bml's check covers */
 		return abi_fail(BML_STATE, "bml: %s is a %s program — program_fd is only for socket_filter (attach the others with their own kind)",
 				bpf_program__name(p), abi_kind_name(o, p));
 	int fd = fcntl(bpf_program__fd(p), F_DUPFD_CLOEXEC, 3);
@@ -210,10 +220,13 @@ int64_t bml_program_fd(int64_t obj, const char *prog, int64_t prog_len)
 	return e;
 }
 
-
-
-
-
+/* ---- netfilter ---- */
+/* Attaches a netfilter program with a link to a netfilter hook in the netns of the calling thread (the
+ * same as cilium's link.AttachNetfilter; pf, hooknum, priority and flags are the caller's arguments, and
+ * bml does not change the netns). A value out of range is VALUE_RANGE before anything reaches the kernel;
+ * the kernel checks what the values mean (pf, hooknum, flags) and its refusal is OTHER. After the attach,
+ * the link info must have type NETFILTER and carry the same four values as the arguments; otherwise the
+ * link is detached and the result is OTHER. */
 static int64_t attach_netfilter_body(int64_t obj, const char *prog, int64_t len, int64_t pf, int64_t hooknum, int64_t priority, int64_t flags)
 {
 	int64_t e;
@@ -229,7 +242,7 @@ static int64_t attach_netfilter_body(int64_t obj, const char *prog, int64_t len,
 				(long long)hooknum, (long long)flags);
 	if (priority < INT32_MIN || priority > INT32_MAX)
 		return abi_fail(BML_VALUE_RANGE, "bml: attach netfilter %s: priority %lld is out of the int32 range", name, (long long)priority);
-
+	/* Mutation: the form attached with another priority (the comparison sees it). The _unconfirmed variant also removes the comparison (a hook carries only one name, as with ksyscall). */
 	int unconfirmed = BML_MUT("nf.priority_other_unconfirmed");
 	int32_t at_prio = BML_MUT("nf.priority_other") || unconfirmed ? (int32_t)priority + 1 : (int32_t)priority;
 	LIBBPF_OPTS(bpf_netfilter_opts, no, .pf = (uint32_t)pf, .hooknum = (uint32_t)hooknum, .priority = at_prio, .flags = (uint32_t)flags);

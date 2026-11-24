@@ -1,3 +1,7 @@
+/* req/uprobe_source.c — choosing the DWARF source of a uprobe (judgement version 16). A port of uprobeDWARFSource and selectSource in bpf-mlir's
+ * go/requirements/uprobe_debug.go, and of how dwarfSubprogramFromData in uprobe.go decides the address. One source per attach, resolved once by the
+ * first target that reads DWARF and shared by the targets of a multi attach (there is no global cache). The order of the steps is steps 1 to 11 of
+ * the section on split DWARF in requirements_format.md. */
 #include "req/check_internal.h"
 
 #include <stdio.h>
@@ -33,7 +37,7 @@ static void hexs(char *out, const uint8_t *b, size_t n)
 	out[2 * n] = 0;
 }
 
-
+/* selectSource: a failure is reported in s->err (and in s->kind for a definite mismatch) */
 static void select_source(struct ck *c, struct ck_dsrc *s)
 {
 	const struct bml_elf *body = s->body;
@@ -41,7 +45,7 @@ static void select_source(struct ck *c, struct ck_dsrc *s)
 		s->err = strdup("the binary contains unsupported .gnu_debugaltlink");
 		return;
 	}
-	if (bml_debug_has_info(body)) {
+	if (bml_debug_has_info(body)) { /* only an existing embedded DWARF counts: if it is broken, no other file is used to rescue it */
 		bml_dwarf_open(body, &s->d, &s->err);
 		return;
 	}
@@ -116,7 +120,7 @@ void ck_dsrc_read(struct ck *c, struct ck_dsrc *s)
 	select_source(c, s);
 }
 
-
+/* Either a source error, or the subprogram chosen by the address of the body's symbol. Returns 0 with *out, or -1 with *err (malloc-ed). */
 int ck_dsrc_subprogram(const struct ck_dsrc *s, const char *T, int parameters, const uint8_t *raw, size_t n_raw, struct bml_dwarf_sub *out,
 		       char **err)
 {
@@ -136,7 +140,7 @@ int bml_uprobe_dwarf_at(const struct bml_elf *body, struct bml_dwarf *d, const c
 		free(detail);
 		return -1;
 	}
-
+	/* the address is that of the first STT_FUNC with a matching name, looking in .symtab and then in .dynsym */
 	uint64_t address = 0;
 	int found = 0;
 	for (uint32_t t = 0; t < 2 && !found; t++) {

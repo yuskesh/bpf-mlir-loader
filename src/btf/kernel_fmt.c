@@ -1,3 +1,6 @@
+/* btf/kernel_fmt.c — a copy of UnderlyingType, Sizeof and the type formatting (formatType, for %s and %v, without
+ * width) of cilium/ebpf v0.22's btf package. It exists to reproduce, byte for byte, the messages for live-caps
+ * mismatches that Go's fmt (%s / %v / %T) produces. */
 #include "btf/kernel.h"
 
 #include <stdint.h>
@@ -33,7 +36,7 @@ static const char *type_name(const struct bml_kbtf *kb, uint32_t id)
 	return bml_kbtf_type_name(&t);
 }
 
-
+/* GoTypeName, and :%q if there is a name */
 static void short_form(const struct bml_kbtf *kb, struct bml_buf *b, uint32_t id, int cycle)
 {
 	if (cycle) {
@@ -74,7 +77,7 @@ void bml_kbtf_format(const struct bml_kbtf *kb, struct bml_buf *b, uint32_t id, 
 	char tmp[48];
 	bml_kbtf_type(kb, id, &t);
 	switch (t.kind) {
-	case KBTF_UNKN:
+	case KBTF_UNKN: /* Void */
 	case KBTF_DATASEC:
 		return;
 	case KBTF_INT: {
@@ -100,7 +103,7 @@ void bml_kbtf_format(const struct bml_kbtf *kb, struct bml_buf *b, uint32_t id, 
 		bml_buf_addf(b, " n=%u]", bml_kbtf_u32(kb, t.aux + 8));
 		return;
 	case KBTF_STRUCT: case KBTF_UNION: {
-
+		/* memberNames: at most 5; a member without a name is written <i>; more than 5 end with ... */
 		bml_buf_addf(b, "[fields=%u fieldNames=[", t.vlen);
 		for (uint32_t i = 0; i < t.vlen && i <= 5; i++) {
 			if (i)
@@ -147,7 +150,7 @@ void bml_kbtf_format(const struct bml_kbtf *kb, struct bml_buf *b, uint32_t id, 
 		bml_buf_addf(b, "[size=%u]", t.size_type * 8);
 		return;
 	case KBTF_DECL_TAG: case KBTF_TYPE_TAG: {
-
+		/* after a string argument, add a space unless it ends with '=' (formatType's wantSpace) */
 		size_t vl = strlen(t.name);
 		bml_buf_adds(b, "[type=");
 		short_form(kb, b, t.size_type, 0);

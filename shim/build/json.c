@@ -1,3 +1,10 @@
+/* shim/build/json.c — requirements.DecodeStrictJSON (decoding into any, and into a declared shape) and bindrt.ParseMapDecls
+ * as build-time exports.
+ *
+ * The scan step (strictScanner — the rules duplicate_key, key_case, invalid_utf8, unpaired_surrogate, trailing_data,
+ * nesting_too_deep, nul, syntax) gives Go's text byte for byte (json/goscan.c). The typed step (Go's json.Decoder with
+ * DisallowUnknownFields — unknown_key and type) runs in Go 1.27's v2-backed encoding/json, whose offsets bml does not derive:
+ * those are UNSUPPORTED (json-unknown-key with Go's detail, json-type), as is a number out of the float64 range under any. */
 #include "shim/build/internal.h"
 
 #include <stdio.h>
@@ -14,7 +21,7 @@ struct bml_build_json {
 	struct bml_json *root;
 };
 
-
+/* ---- shapes → bml's type descriptions ---- */
 
 struct descs {
 	void **p;
@@ -40,7 +47,7 @@ static void descs_free(struct descs *d)
 	free(d->p);
 }
 
-
+/* 0 and *out; -1 with *why (static) for an invalid shape; -2 for out of memory */
 static int to_desc(const struct bml_build_shape *s, int depth, struct descs *d, const struct bml_json_desc **out, const char **why)
 {
 	if (!s)
@@ -94,9 +101,9 @@ static int to_desc(const struct bml_build_shape *s, int depth, struct descs *d, 
 	return 0;
 }
 
+/* ---- the two steps ---- */
 
-
-
+/* the scan step: 0 when it passes; otherwise the error is set (FAIL, Go's text; the prefix "maps: " for ParseMapDecls) */
 static int scan_step(const void *data, size_t len, const struct bml_json_desc *desc, const char *prefix, int parts,
 		     struct bml_build_error *err)
 {
@@ -114,7 +121,8 @@ static int scan_step(const void *data, size_t len, const struct bml_json_desc *d
 	struct bml_buf b = {0};
 	bml_buf_addf(&b, "%sjson: %s at byte %lld: %s", prefix, ge.rule, (long long)ge.offset, ge.detail);
 	char *t = bml_buf_take(&b);
-	if (ge.key_quote) {
+	if (ge.key_quote) { /* The key quoted in the message is not in Go's %q form, so Go's text cannot be reproduced: report it as UNSUPPORTED
+		 * and keep only the rule name. */
 		int rc = t ? bb_unsupported(err, "json-key-quote", t) : bb_nomem(err);
 		free(t);
 		if (parts && rc == BML_BUILD_UNSUPPORTED)
@@ -134,9 +142,9 @@ static int scan_step(const void *data, size_t len, const struct bml_json_desc *d
 	return err->code;
 }
 
-
-
-
+/* The first member (document order, depth first) whose name an earlier member of the same object has. The
+ * scan rejects raw repeated keys, so after the typed check a repeat comes only from folding (U+017F, U+212A) — Go then keeps
+ * the last scalar and merges structs, which the tree does not reproduce (json-alias-collision). */
 static const struct bml_json_member *repeated_member(const struct bml_json *j)
 {
 	if (!j)
@@ -161,15 +169,15 @@ static const struct bml_json_member *repeated_member(const struct bml_json *j)
 	return NULL;
 }
 
-
-
+/* the typed step on a scanned document: 0 and *out, or the error set (UNSUPPORTED json-unknown-key / json-type /
+ * json-alias-collision) */
 static int typed_step(const void *data, size_t len, const struct bml_json_desc *desc, int parts, struct bml_json **out,
 		      struct bml_build_error *err)
 {
 	struct bml_json *j = NULL;
 	char *m = NULL;
 	enum bml_json_rule rule = BML_JR_NONE;
-
+	/* key_case was the scan step's (the mutant json_no_key_case skips it there, so parse without the description here) */
 	const struct bml_json_desc *pdesc = BML_MUT("build.json_no_key_case") ? NULL : desc;
 	if (bml_json_parse_ex(data ? data : "", len, pdesc, 0, &j, &m, &rule)) {
 		int rc = rule == BML_JR_OOM ? bb_nomem(err) : bb_unsupported(err, "json-scan", m);
@@ -183,13 +191,13 @@ static int typed_step(const void *data, size_t len, const struct bml_json_desc *
 		} else if (rule == BML_JR_UNKNOWN_KEY) {
 			rc = bb_unsupported(err, "json-unknown-key", m);
 			if (parts && rc == BML_BUILD_UNSUPPORTED) {
-
+				/* bml's text is `json: unknown field "<key>"` with the key as written; Go's detail is `unknown field %q` */
 				static const char pre[] = "json: unknown field \"";
 				size_t ml = strlen(m), pl = sizeof pre - 1;
 				struct bml_buf b = {0};
 				bml_buf_adds(&b, "unknown field ");
 				char *key = ml > pl && !strncmp(m, pre, pl) ? strndup(m + pl, ml - pl - 1) : NULL;
-				if (key && bml_json_go_key_quotable(key)) {
+				if (key && bml_json_go_key_quotable(key)) { /* else no detail: not Go's %q */
 					bml_buf_add_goquote(&b, key, strlen(key));
 					err->detail = bml_buf_take(&b);
 				} else {
@@ -286,7 +294,7 @@ int bml_build_map_decls_validate(const void *data, size_t len, struct bml_build_
 	return BML_BUILD_OK;
 }
 
-
+/* ---- the tree ---- */
 
 #define NODE(n) ((const struct bml_json *)(const void *)(n))
 

@@ -1,3 +1,4 @@
+/* caps/recorder.c — a C port of Recorder (go/requirements/recorder.go) and of writing caps.json (the bytes of json.MarshalIndent). */
 #define _GNU_SOURCE
 #include "caps/recorder_internal.h"
 
@@ -66,7 +67,7 @@ int bml_recorder_set_binary(struct bml_recorder *r, const char *program, const c
 	return 0;
 }
 
-
+/* The place of a recording (the same key is overwritten by a later answer, which erases the earlier content). NULL on out of memory. */
 struct rec *slot(struct bml_recorder *r, const char *q, const char *key)
 {
 	for (size_t i = 0; i < r->n; i++)
@@ -91,7 +92,7 @@ struct rec *slot(struct bml_recorder *r, const char *q, const char *key)
 	return e;
 }
 
-
+/* Record an answer that is an error (Unknown or an error). 1 means recorded, 0 means it is not an error. */
 int put_err(struct rec *e, int rc, const char *msg)
 {
 	if (rc == BML_Q_OK)
@@ -224,7 +225,7 @@ static int nullable_args(void *ctx, int *out, char **msg)
 	return rc;
 }
 
-
+/* ebpf-caps recording format 4: the keys are those of recorded_query.c */
 static int attach_type(void *ctx, const char *pt, int64_t ptid, const char *at, int *out, char **msg)
 {
 	int rc = U(ctx)->attach_type(U(ctx)->ctx, pt, ptid, at, out, msg);
@@ -287,7 +288,7 @@ static int tracepoint(void *ctx, const char *name, const struct bml_str *args, s
 	return rc;
 }
 
-
+/* since bpf-mlir v0.17.0: the key is name(a,b,...) (the same form as tracepoint) */
 static int func_args(void *ctx, const char *name, const struct bml_str *args, size_t n, struct bml_strs *out, char **msg)
 {
 	int rc = U(ctx)->func_args(U(ctx)->ctx, name, args, n, out, msg);
@@ -306,7 +307,7 @@ static int func_args(void *ctx, const char *name, const struct bml_str *args, si
 	return rc;
 }
 
-
+/* ebpf-caps recording format 5: the keys are the bml_caps_*_key functions of recorded.h */
 static int tp_field(void *ctx, const char *event, const char *field, int64_t off, int64_t bytes, const char *sign, struct bml_strs *out,
 		    char **msg)
 {
@@ -329,7 +330,7 @@ static int struct_ops_member(void *ctx, const char *strct, const char *member, i
 	return rc;
 }
 
-
+/* The replacement target (an input of the loader) is asked of the caps underneath, but the recording gets Unknown, not the answer (Go's Recorder.CheckExtTarget) */
 static int ext_target(void *ctx, const char *program, const char *fn, int64_t nargs, const char *ret, const struct bml_str *args, size_t n,
 		      struct bml_strs *out, char **msg)
 {
@@ -343,7 +344,7 @@ static int ext_target(void *ctx, const char *program, const char *fn, int64_t na
 	return rc;
 }
 
-
+/* ask the caps underneath for each kfield (Go's Recorder.CheckKFields); an error stops there */
 static int kfields(void *ctx, const struct bml_kfield *kf, size_t n, struct bml_strs *out, char **msg)
 {
 	memset(out, 0, sizeof *out);
@@ -394,7 +395,7 @@ static int func_param(void *ctx, const char *name, int64_t n, const char *type, 
 	return rc;
 }
 
-
+/* kfunc_protos and syscall_args (recDiffs) */
 static int kfunc(void *ctx, const char *name, const char *ret, const struct bml_str *args, size_t n, struct bml_strs *out, char **msg)
 {
 	int rc = U(ctx)->kfunc(U(ctx)->ctx, name, ret, args, n, out, msg);
@@ -413,7 +414,7 @@ static int syscall_arg(void *ctx, const char *name, int64_t n, const char *type,
 	return rc;
 }
 
-
+/* kfunc_loads (recBool) and tracepoint_buffer (recDiffs) */
 static int kfunc_load(void *ctx, const struct bml_kfunc_profile *p, const char *name, const char *ret, const struct bml_str *args, size_t n, int *out, char **msg)
 {
 	int rc = U(ctx)->kfunc_load(U(ctx)->ctx, p, name, ret, args, n, out, msg);
@@ -479,7 +480,7 @@ void bml_recorder_caps(struct bml_recorder *r, struct bml_caps *out)
 	W(tracepoint_buffer);
 	W(arch);
 #undef W
-	rr_caps_files(u, out);
+	rr_caps_files(u, out); /* uprobe_binary and uprobe_debug (recorder_files.c) */
 	rr_caps_kernel_values(u, out);
 }
 

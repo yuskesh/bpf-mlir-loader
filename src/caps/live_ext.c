@@ -1,3 +1,7 @@
+/* caps/live_ext.c — the replacement target of an ext program: a C port of LoadExtTargetSpec and CheckExtTargetBTF from
+ * kernel/internal/kload/v11.go. It was split out of live_v11.c. Only ebpf-precheck's --ext-target uses it (the live caps of the
+ * C ABI have no ext_targets query, so an freplace program stops with ext_target_unknown). The target is either the path of an
+ * object (the .BTF of an ELF file, or a raw BTF) or `prog-id:<id>` (the BTF of an already loaded program). */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -11,10 +15,11 @@
 #include "elf/elf.h"
 #include "util/gostr.h"
 
-#define UNK ": cannot be determined on this target"
+#define UNK ": cannot be determined on this target" /* the ErrUnknown sentence (%w) */
 
-
-
+/* The BTF of an already loaded program: BPF_PROG_GET_FD_BY_ID, then the btf_id in the program's info, then BPF_BTF_GET_FD_BY_ID,
+ * then the contents in the BTF's info. Returns 0 and fills *raw, or -1 with *err. The sentences are those of cilium's
+ * NewProgramFromID, Info and btf.NewHandleFromID. */
 static int prog_btf(uint32_t id, uint8_t **raw, size_t *len, char **err)
 {
 	union bpf_attr a;
@@ -65,7 +70,7 @@ static int prog_btf(uint32_t id, uint8_t **raw, size_t *len, char **err)
 	a.info.bpf_fd = (uint32_t)bfd;
 	a.info.info_len = sizeof bi;
 	a.info.info = (uint64_t)(uintptr_t)&bi;
-	rc = lv_bpf(BPF_OBJ_GET_INFO_BY_FD, &a, sizeof a);
+	rc = lv_bpf(BPF_OBJ_GET_INFO_BY_FD, &a, sizeof a); /* the first call gets the size, the second the contents */
 	uint32_t size = bi.btf_size;
 	uint8_t *buf = rc < 0 ? NULL : malloc(size ? size : 1);
 	if (buf) {
@@ -119,7 +124,7 @@ int bml_ext_target_load(const char *target, struct bml_kbtf *kb, char **err)
 			free(es);
 			return -1;
 		}
-
+		/* btf.LoadSpec: the .BTF section if the file is an ELF, otherwise a raw BTF */
 		struct bml_elf elf;
 		char *eerr = NULL;
 		if (len >= 4 && !memcmp(data, "\177ELF", 4)) {
@@ -177,7 +182,7 @@ int bml_ext_target_check(const struct bml_kbtf *kb, const char *fn, int64_t narg
 	struct kbtf_type f, fp;
 	bml_kbtf_type(kb, id, &f);
 	struct bml_buf b = {0};
-	if (f.vlen != 1) {
+	if (f.vlen != 1) { /* the String of btf.FuncLinkage */
 		static const char *const lk[] = {"static", "global", "extern"};
 		bml_buf_addf(&b, "function %s has linkage ", fn);
 		if (f.vlen < 3)
@@ -188,7 +193,7 @@ int bml_ext_target_check(const struct bml_kbtf *kb, const char *fn, int64_t narg
 		if (lv_push(out, &b))
 			return lv_oom(out, msg);
 	}
-	bml_kbtf_type(kb, f.size_type, &fp);
+	bml_kbtf_type(kb, f.size_type, &fp); /* Go uses the direct type of f.Type */
 	if (fp.kind != KBTF_FUNC_PROTO) {
 		bml_buf_addf(&b, "function %s has no FUNC_PROTO in the replacement target", fn);
 		return lv_push(out, &b) ? lv_oom(out, msg) : BML_Q_OK;

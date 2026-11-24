@@ -1,3 +1,4 @@
+/* Three-valued logic of guards: an Unknown or an error result is never treated as false. */
 #include "req/check_internal.h"
 
 #include <stdlib.h>
@@ -93,7 +94,7 @@ int ck_check_kfields_guarded(struct ck *c)
 		if (ck_guards_state(c, &k->guards, &state, &why)) { bml_strs_free(&d); return -1; }
 		char *name = ck_fmtd("%s.%s (%s)", k->strct.p, k->field.p, k->type.p);
 		const struct bml_loader_decl *decl = ck_loader_of(c);
-		if (!state && decl->core_poisons_missing_field) {                                                        }
+		if (!state && decl->core_poisons_missing_field) { /* confirmed absent, poisoned in unreachable branch */ }
 		else if (!state) ck_add(c, "kfield_unknown", k->program.p, name, 0,
 			ck_fmtd("%s; loader %s does not declare core_poisons_missing_field", why, decl->name));
 		else if (state == 2 || !have) ck_add(c, "kfield_unknown", k->program.p, name, 0, ck_dupn(why && why[0] ? why : "no kfields query"));

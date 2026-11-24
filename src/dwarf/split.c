@@ -1,3 +1,7 @@
+/* dwarf/split.c — the binding of separate DWARF and the checks made before reading it: a copy of debugBuildID,
+ * debugLinkCRC, debugSectionLimits and steps 1, 9, 10 and 11 of selectSource in bpf-mlir's
+ * go/requirements/uprobe_debug.go (from bpf-mlir's split-DWARF support). The messages are the fixed ASCII texts of
+ * the separate-DWARF section of requirements_format.md. */
 #include "dwarf/split.h"
 
 #include <stdio.h>
@@ -10,7 +14,7 @@ static int reason(char **out, const char *s)
 	return -1;
 }
 
-
+/* uniqueDebugSection: exactly one section with the name gives it in *s; none gives 0 with *s = NULL; two or more give -1 */
 static int unique(const struct bml_elf *e, const char *name, const struct bml_elf_shdr **s)
 {
 	*s = NULL;
@@ -38,7 +42,7 @@ int bml_debug_build_id(const struct bml_elf *e, const char *owner, uint8_t **id,
 	const uint8_t *b;
 	size_t len;
 	char *err = NULL;
-	if (s->type != 7                || (s->flags & BML_SHF_COMPRESSED) || s->size > 4096 || bml_elf_section_data(e, s, &b, &len, &err)) {
+	if (s->type != 7 /* SHT_NOTE */ || (s->flags & BML_SHF_COMPRESSED) || s->size > 4096 || bml_elf_section_data(e, s, &b, &len, &err)) {
 		free(err);
 		return reason(why, invalid);
 	}
@@ -81,7 +85,7 @@ int bml_debug_link_crc(const struct bml_elf *e, uint32_t *crc, int *has, char **
 	const uint8_t *b;
 	size_t len;
 	char *err = NULL;
-	if (s->type != 1                    || (s->flags & BML_SHF_COMPRESSED) || s->size > 4096 || bml_elf_section_data(e, s, &b, &len, &err)) {
+	if (s->type != 1 /* SHT_PROGBITS */ || (s->flags & BML_SHF_COMPRESSED) || s->size > 4096 || bml_elf_section_data(e, s, &b, &len, &err)) {
 		free(err);
 		return reason(why, invalid);
 	}
@@ -96,10 +100,10 @@ int bml_debug_link_crc(const struct bml_elf *e, uint32_t *crc, int *has, char **
 	return 0;
 }
 
-
+/* hash/crc32.ChecksumIEEE (the table for the reflected polynomial 0xedb88320). zlib's crc32 is not used: libelf.a (elfutils) has a symbol of the same name, and the two collide at link time. */
 uint32_t bml_crc32_ieee(const uint8_t *p, size_t n)
 {
-	uint32_t t[256];
+	uint32_t t[256]; /* built on every call, so the process keeps no state (nothing is shared between threads) */
 	for (uint32_t i = 0; i < 256; i++) {
 		uint32_t c = i;
 		for (int k = 0; k < 8; k++)
@@ -124,7 +128,7 @@ static int is_debug(const char *name)
 
 int bml_debug_open_checks(const struct bml_elf *f, char **why)
 {
-
+	/* Go's elf.NewFile reads the compression header of an SHF_COMPRESSED section when it opens the file (and cannot open it if the header is unreadable); bml_elf_open does not read it */
 	size_t hl = f->is64 ? 24 : 12;
 	for (size_t i = 0; i < f->n_sections; i++) {
 		const struct bml_elf_shdr *s = &f->sections[i];
@@ -140,12 +144,12 @@ int bml_debug_split_checks(const struct bml_elf *f, char **why)
 		return reason(why, "separate DWARF contains unsupported .gnu_debugaltlink");
 	for (size_t i = 0; i < f->n_sections; i++) {
 		const struct bml_elf_shdr *s = &f->sections[i];
-		if ((s->type == BML_SHT_REL || s->type == 4               ) && s->info < f->n_sections && is_debug(f->sections[s->info].name))
+		if ((s->type == BML_SHT_REL || s->type == 4 /* SHT_RELA */) && s->info < f->n_sections && is_debug(f->sections[s->info].name))
 			return reason(why, "separate DWARF contains unsupported relocations");
 	}
 	if (bml_elf_section(f, ".debug_types") || bml_elf_section(f, ".zdebug_types"))
 		return reason(why, "separate DWARF contains unsupported type units");
-
+	/* debugSectionLimits: in section-table order, check NOBITS, then the range, then the compression header, then zstd, then the total decompressed size */
 	const char *invalid = "separate DWARF has an invalid compression header";
 	uint64_t total = 0;
 	for (size_t i = 0; i < f->n_sections; i++) {

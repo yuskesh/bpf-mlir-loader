@@ -1,3 +1,4 @@
+/* caps/recorded_target_rows.c — a C port of reading and querying the netkit, helper_target and sleepable_types entries of recorded caps. */
 #include "caps/recorded_internal.h"
 
 #include <stdint.h>
@@ -18,7 +19,7 @@ char *bml_caps_helper_target_key(const char *pt, int64_t id, const struct bml_he
 	return bml_buf_take(&b);
 }
 
-
+/* whether the result of strings.TrimSpace is empty (Unicode White_Space, like Go's unicode.IsSpace) */
 static int blank(const char *s)
 {
 	const unsigned char *p = (const unsigned char *)s;
@@ -51,7 +52,7 @@ static const struct query *q_of(const struct bml_recorded *r, const char *name, 
 	return NULL;
 }
 
-
+/* parseHelperTargetKey: if it is not an array of 8 strings the first sentence applies; if the shape is right but not canonical, the second one */
 static int check_helper_key(const char *key, char **err)
 {
 	size_t n = strlen(key), pn = sizeof HT_PREFIX - 1, sn = sizeof HT_SUFFIX - 1;
@@ -132,7 +133,7 @@ static int check_netkit(const struct bml_recorded *r, int version, char **err)
 	return 0;
 }
 
-
+/* An omittable field of Answer cannot tell "missing" from "empty", so the raw form of the JSON is examined (the first half of Go's checkRecordedHelperTargets) */
 static int check_helper_raw(const struct bml_recorded *r, const struct bml_json *root, char **err)
 {
 	static const char *const objs[2] = {"queries", "privileged_queries"};
@@ -221,7 +222,7 @@ int rc_check_target_queries(const struct bml_recorded *r, const struct bml_json 
 	return check_helper(r, j, version, err);
 }
 
-
+/* helperTargetPrivilege: a different UID also counts (use the caps that probe again if they exist, otherwise Unknown); the rest is the common privileged step */
 int rc_helper_target_privilege(const struct bml_recorded *r, const struct bml_caps **reprobe, char **msg)
 {
 	*reprobe = NULL;

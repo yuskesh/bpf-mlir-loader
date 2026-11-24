@@ -1,3 +1,6 @@
+/* caps/live_caps.c — adapts the live caps to the shape of the matching caps (bml_caps). It is a C port of kload's LiveCaps and of
+ * ebpf-precheck's liveCaps (with the fds from `--binary`): it provides every query, except that uprobe_binary is provided only
+ * when at least one `--binary` is given. The loader declaration is the declared loader (ebpf-precheck's liveCaps.Loader). */
 #define _GNU_SOURCE
 #include "caps/live_caps.h"
 
@@ -23,7 +26,7 @@ static int has_query(void *ctx, const char *q)
 {
 	if (strcmp(q, BML_QUERY_UPROBE_BIN) == 0)
 		return LC(ctx)->n_bins > 0;
-	if (strcmp(q, BML_QUERY_EXT_TARGETS) == 0)
+	if (strcmp(q, BML_QUERY_EXT_TARGETS) == 0) /* only when --ext-target is given */
 		return LC(ctx)->n_exts > 0;
 	return 1;
 }
@@ -40,7 +43,8 @@ static int q_struct_ops_member(void *ctx, const char *strct, const char *member,
 	return bml_live_struct_ops_member(&LC(ctx)->live, strct, member, nargs, ret, args, n, out, msg);
 }
 
-
+/* ebpf-precheck's liveCaps.CheckExtTarget: the BTF of the program's --ext-target. A missing or unreadable BTF is Unknown. If the
+ * same program is given twice, the later one wins. */
 static int q_ext_target(void *ctx, const char *program, const char *fn, int64_t nargs, const char *ret, const struct bml_str *args, size_t n,
 			struct bml_strs *out, char **msg)
 {
@@ -195,13 +199,14 @@ static int q_arch(void *ctx, char **out, char **msg)
 	return bml_live_arch(out, msg);
 }
 
-
+/* ebpf-precheck's liveCaps.UprobeBinary: the fd given by `--binary`, so that matching and attaching use the same inode (loader
+ * contract L3). If there is none the answer is Unknown. */
 static int q_uprobe_binary(void *ctx, const char *program, uint8_t **data, size_t *len, char **msg)
 {
 	struct bml_live_caps *c = LC(ctx);
 	*data = NULL;
 	*len = 0;
-	for (size_t i = c->n_bins; i-- > 0;) {
+	for (size_t i = c->n_bins; i-- > 0;) { /* for the same program the later entry wins */
 		if (strcmp(c->bins[i].program, program) != 0)
 			continue;
 		size_t cap = 1 << 16, n = 0;
@@ -240,7 +245,8 @@ static int q_uprobe_binary(void *ctx, const char *program, uint8_t **data, size_
 	return BML_Q_UNKNOWN;
 }
 
-
+/* LiveCaps.UprobeDebugFile does not ask the kernel. If an override exists only the override is used; otherwise the answer comes
+ * from the .build-id path under the root. */
 static int q_uprobe_debug(void *ctx, const char *program, const uint8_t *id, size_t n, uint8_t **data, size_t *len, char **path, char **msg)
 {
 	struct bml_live_caps *c = LC(ctx);

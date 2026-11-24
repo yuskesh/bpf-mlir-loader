@@ -1,3 +1,5 @@
+/* Read split module BTF keeping the base's type ids and string offsets. A temporary concatenated view is passed to the
+ * existing strict decoder, and the caller enumerates only the ids that belong to the module itself (own id >= base->n). */
 #include "btf/kernel.h"
 
 #include <stdlib.h>

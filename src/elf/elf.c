@@ -1,3 +1,4 @@
+/* elf.c — a copy of the order of checks in Go's debug/elf.NewFile (Go 1.27, file.go lines 280-640) */
 #include "elf/elf.h"
 
 #include <stdarg.h>
@@ -38,7 +39,7 @@ uint64_t bml_elf_u64(const struct bml_elf *e, const uint8_t *p)
 	return hi << 32 | lo;
 }
 
-
+/* Is [off, off+n) inside the file (overflow included)? */
 static int in_file(const struct bml_elf *e, uint64_t off, uint64_t n)
 {
 	return off <= e->len && n <= e->len - off;
@@ -77,8 +78,10 @@ int bml_elf_open(const void *data, size_t len, struct bml_elf *e, char **err)
 	unsigned phentsize, phnum, shentsize, shnum, shstrndx;
 	e->type = bml_elf_u16(e, d + 16);
 	e->machine = bml_elf_u16(e, d + 18);
-	
-
+	/* e_version must be 1 in all 4 bytes (the C side is deliberately stricter, a decision made at review). Go's
+	 * elf.Version is a byte type, so Go compares only the low byte and accepts an ELF whose upper bytes are corrupt.
+	 * This is a known difference (it is in the exclusion table of the diff-elf differential check, and was reported
+	 * to bpf-mlir as a contract point). */
 	if (bml_elf_u32(e, d + 20) != 1)
 		return ferr(err, "mismatched ELF version");
 	if (e->is64) {
@@ -111,7 +114,7 @@ int bml_elf_open(const void *data, size_t len, struct bml_elf *e, char **err)
 		return ferr(err, "invalid ELF phentsize");
 	uint64_t n_sh = shnum, n_ph = phnum;
 	if (shoff > 0 && (shnum == 0 || phnum == 0xffff)) {
-
+		/* extended numbering: the header of section 0 */
 		if (!in_file(e, shoff, want_sh))
 			return ferr(err, "unexpected EOF reading section 0");
 		const uint8_t *s0 = d + shoff;
@@ -137,10 +140,10 @@ int bml_elf_open(const void *data, size_t len, struct bml_elf *e, char **err)
 				return ferr(err, "invalid ELF shstrndx contained in sh_link");
 		}
 	}
-
+	/* program headers: the whole table must be inside the file (Go's saferio.ReadDataAt) */
 	if (n_ph > 0 && UINT64_MAX / n_ph < phentsize)
 		return ferr(err, "segment header overflow");
-	if (n_ph * phentsize > 0 && !in_file(e, phoff, n_ph * phentsize))
+	if (n_ph * phentsize > 0 && !in_file(e, phoff, n_ph * phentsize)) /* Go does not check a zero-byte read */
 		return ferr(err, "unexpected EOF reading program headers");
 	if (n_ph) {
 		e->progs = calloc(n_ph, sizeof(*e->progs));
@@ -227,7 +230,7 @@ int bml_elf_open(const void *data, size_t len, struct bml_elf *e, char **err)
 			bml_elf_close(e);
 			return ferr(err, "invalid section offset or size");
 		}
-
+		/* Go reads the header (Chdr) of a compressed section when it opens the file, so a failure to read it makes the open fail */
 		if (s->flags & BML_SHF_COMPRESSED) {
 			uint64_t ch = e->is64 ? 24 : 12;
 			if (s->size < ch || !in_file(e, s->offset, ch)) {
@@ -258,7 +261,7 @@ int bml_elf_open(const void *data, size_t len, struct bml_elf *e, char **err)
 		return -1;
 	}
 	for (uint64_t i = 0; i < n_sh; i++) {
-
+		/* Go's getString: the index is in range and a NUL follows it */
 		if (names[i] >= tlen || !memchr(tab + names[i], 0, tlen - names[i])) {
 			free(names);
 			bml_elf_close(e);

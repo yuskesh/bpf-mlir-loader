@@ -1,3 +1,6 @@
+/* Controls added after a local review of the VM runner: fixing the IDs that the runner owns and leaving an ID unobserved
+ * when it cannot be observed, the bounded receive window, and the classification of a known-false stop (these tests touch
+ * neither the kernel nor root). */
 #include "run_own.h"
 
 #include <stdlib.h>
@@ -61,7 +64,8 @@ static int collect(uint32_t *ids, int *n, char *err, size_t en)
 	return own_collect_links(&fk, 7, 5, 6, ids, inf, 4, n, err, en);
 }
 
-
+/* The window: even if every read returns noise at once, the loop does not finish before the deadline (the clock advances
+ * by 1 ms per read) */
 static struct { int mode, reads; } w;
 static ssize_t r_read(void *c, uint8_t *b, size_t n, int *o)
 {
@@ -78,7 +82,7 @@ static ssize_t r_read(void *c, uint8_t *b, size_t n, int *o)
 static int r_match(const uint8_t *b, ssize_t n, void *a) { (void)b, (void)n, (void)a; return 0; }
 static const struct window_ops wo = {r_read, f_now, NULL};
 
-
+/* The wiring of STOP: records the order in which the stages were called, as characters. The phase is one of n/a/r/f. */
 static struct { char log[32]; int len, fail_at, out_after; } a;
 static int a_rec(char c, int rc)
 {

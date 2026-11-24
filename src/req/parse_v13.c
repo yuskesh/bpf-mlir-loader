@@ -1,3 +1,8 @@
+/* req/parse_v13.c — the rows of format version 13 (a port of parseKfunc and parseV13Companion in bpf-mlir's go/requirements/companion_v13.go).
+ * A kfunc row is tied to its program by name; its position does not matter, and a program and name pair occurs once. A sysarg row comes
+ * after the arch row of a ksyscall, with n strictly ascending within 1..6. A mtargetarg row comes after the N mtarget rows of a
+ * kprobe_multi / uprobe_multi program; it excludes kprobearg / uprobearg rows, its (i, n) pairs are in strictly ascending lexicographic
+ * order, and i is smaller than the number of functions. */
 #include "req/parse_internal.h"
 #include "util/mutation.h"
 
@@ -6,13 +11,13 @@
 
 #define SYSCALL_MAX_ARGS 6
 
-
+/* validKfuncScalar: an integer spelling or bool. */
 static int kfunc_scalar(struct field s)
 {
 	return req_valid_int_spelling(s) || req_eq(s, "bool");
 }
 
-
+/* validKfuncType: a scalar, void (for a return type only), or ptr:<scalar|void|C identifier>. */
 static int kfunc_type(struct field s, int ret)
 {
 	if (kfunc_scalar(s) || (ret && req_eq(s, "void")))
@@ -40,7 +45,7 @@ int req_v13_kfunc(struct bml_requirements *r, struct field *f, size_t nf, struct
 		return -2;
 	struct bml_kfunc *k = &r->kfuncs[r->n_kfuncs];
 	memset(k, 0, sizeof(*k));
-	r->n_kfuncs++;
+	r->n_kfuncs++; /* count first, so that free also sees the contents when mkstr fails */
 	if (req_mkstr(&k->program, f[1]) || req_mkstr(&k->name, f[2]) || req_mkstr(&k->ret, f[3]))
 		return -2;
 	if (nf > 4) {
@@ -68,7 +73,7 @@ int req_v13_companion(struct bml_requirements *r, struct field *f, struct field 
 	if (!strcmp(row, "sysarg")) {
 		if (!req_str_eq_lit(&a->attach_type, "ksyscall") || a->arch.len == 0)
 			return OUT_OF_ORDER();
-
+		/* strptr and strarray exist from format version 16 on (checked before the value check). */
 		int str = req_eq(f[3], "strptr") || req_eq(f[3], "strarray");
 		if (str && r->version < 16 && !BML_MUT("parse.v16_rows_any_version"))
 			return req_perr(e, n, row, "min_version", "%s line %d: sysarg type %s needs version 16", SEC, (int64_t)n,
@@ -94,7 +99,7 @@ int req_v13_companion(struct bml_requirements *r, struct field *f, struct field 
 	if (bml_go_atoi(f[2].p, f[2].n, &i) || bml_go_atoi(f[3].p, f[3].n, &na) || i < 0 || na < 1 ||
 	    !(req_valid_int_spelling(f[4]) || req_eq(f[4], "ptr") || (!kp && req_eq(f[4], "strptr"))))
 		return BAD();
-
+	/* A ptr argument on the user side (uprobe_multi) exists from format version 18 on; on the kprobe side ptr existed earlier. */
 	if (!kp && req_eq(f[4], "ptr") && r->version < 18 && !BML_MUT("parse.v18_rows_any_version"))
 		return req_perr(e, n, row, "min_version", "%s line %d: user mtargetarg type ptr needs version 18", SEC, (int64_t)n);
 	if (a->n_mtarget_args > 0) {

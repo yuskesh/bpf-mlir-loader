@@ -1,3 +1,7 @@
+/* caps/recorded_priv.c — the separation of recorded caps by privilege (policy version 10), a C port of bpf-mlir's go/requirements/privilege.go:
+ * whether the answer to a query depends on the privilege of the probe (PrivilegeDependentQueries), SamePrivilege (the 64 bits of
+ * CapEff), ForLoad (if the privilege of the load differs from the recorded probed_as, queries that depend on privilege go to the caps
+ * that probe again, or become Unknown; each callback in recorded_query.c asks rc_privileged first) and ParseLoadAs. */
 #define _GNU_SOURCE
 #include "caps/recorded_internal.h"
 
@@ -12,7 +16,7 @@
 static const char *const dependent[] = {
 	BML_QUERY_PROG_TYPE,   BML_QUERY_HELPER,        BML_QUERY_MAP_TYPE,       BML_QUERY_TCX,         BML_QUERY_BTF_FEATURE, BML_QUERY_ARG_TAG,
 	BML_QUERY_MAP_FIELD,   BML_QUERY_NULLABLE_ARGS, BML_QUERY_TRACING_HELPER, BML_QUERY_ATTACH_TYPE, BML_QUERY_CTX_ACCESS,
-	BML_QUERY_KFUNC_LOADS,
+	BML_QUERY_KFUNC_LOADS, /* added in ebpf-caps recording format 9 */
 	BML_QUERY_FIB_FLAGS,
 	BML_QUERY_NETKIT, BML_QUERY_SLEEPABLE, BML_QUERY_HELPER_TARGET,
 };
@@ -25,7 +29,7 @@ int bml_caps_privilege_dependent(const char *q)
 	return 0;
 }
 
-
+/* strconv.ParseUint(s, 16, 64): one or more hexadecimal digits only (no sign, no 0x); more than 64 bits is an error */
 static int parse_hex64(const char *s, size_t n, uint64_t *out)
 {
 	uint64_t v = 0;
@@ -42,7 +46,7 @@ static int parse_hex64(const char *s, size_t n, uint64_t *out)
 	return 0;
 }
 
-
+/* hexadecimal after strings.TrimSpace */
 static int trimmed_hex(const char *s, uint64_t *out)
 {
 	size_t n = strlen(s);
@@ -70,7 +74,7 @@ int bml_recorded_for_load(struct bml_recorded *r, long long load_uid, const char
 	r->scope.load_cap = c;
 	r->scope.reprobe = reprobe;
 	r->scope.mismatch = !r->has_probed || !bml_caps_same_privilege(r->probed_cap, c);
-	if (BML_MUT("caps.priv_ignore_load_as"))
+	if (BML_MUT("caps.priv_ignore_load_as")) /* mutation: ignore the difference in privilege (the recorded answer is reused for a load with other privilege) */
 		r->scope.mismatch = 0;
 	return 0;
 }
@@ -78,7 +82,7 @@ int bml_recorded_for_load(struct bml_recorded *r, long long load_uid, const char
 int rc_privileged(const struct bml_recorded *r, const char *q, const struct bml_caps **reprobe, char **msg)
 {
 	*reprobe = NULL;
-	int dep = BML_MUT("caps.priv_split_all") ? 1 : bml_caps_privilege_dependent(q);
+	int dep = BML_MUT("caps.priv_split_all") ? 1 : bml_caps_privilege_dependent(q); /* mutation: treat every query as depending on privilege */
 	if (!r->scope.set || !r->scope.mismatch || !dep)
 		return 0;
 	if (r->scope.reprobe) {

@@ -1,3 +1,5 @@
+/* The split BTF of each module is decoded one at a time, and only the full names of its own VARs and STRUCTs are kept in the snapshot.
+ * The whole of vmlinux is not kept resident for each module. A missing measurement is kept as incompleteness of the set. */
 #define _GNU_SOURCE
 #include "caps/value_sources.h"
 

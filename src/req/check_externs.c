@@ -1,3 +1,4 @@
+/* Port of the ksymvar.go checks: the order in which the loader and the kernel are asked, and the guards of weak externs. */
 #include "req/check_internal.h"
 
 #include <errno.h>

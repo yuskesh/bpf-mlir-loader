@@ -1,3 +1,10 @@
+/* caps/live_multi.c — the link probe for the attach_types trace_kprobe_multi, trace_uprobe_multi and trace_kprobe_session. It is a C
+ * port of multiLinkProbe in kernel/internal/kload/attachctx.go, and live_attach.c calls it. It loads `r0 = 0; exit` with the expected
+ * attach type and, if that is accepted, creates a link and **closes it at once** (kprobe.multi and session attach to bpf_fentry_test1;
+ * uprobe.multi attaches to an uncalled function of this process's executable, with this process's pid). If the link can be created
+ * the answer is true. Errors are classified as cilium v0.22's link.KprobeMulti and Executable.UprobeMulti do (ESRCH, the feature
+ * probe, EINVAL) and by kload's multiLinkVerdict (EOPNOTSUPP or ErrNotSupported is false, anything else is Unknown). A rejected
+ * load is left to the caller's paired load (-2). */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -17,7 +24,7 @@
 
 static const uint8_t ret_zero[16] = {0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 
-
+/* an uncalled function (the target of the uprobe.multi probe; it must be neither inlined nor removed) */
 __attribute__((noinline, used)) void bml_live_uprobe_multi_probe_target(void)
 {
 	__asm__ volatile("" ::: "memory");
@@ -62,7 +69,7 @@ static int link_uprobe_multi(int pfd, const char *path, uint64_t off, uint32_t p
 	return lv_bpf(BPF_LINK_CREATE, &a, sizeof a);
 }
 
-
+/* A port of cilium's features.HaveBPFLinkKprobeMulti, Session and UprobeMulti: 0 means present, 1 means ErrNotSupported, and -errno is any other error (*txt, malloc'd) */
 static int have_link(struct bml_live *l, uint32_t at, char **txt)
 {
 	struct lv_res r;
@@ -100,7 +107,7 @@ static int have_link(struct bml_live *l, uint32_t at, char **txt)
 	return lfd;
 }
 
-
+/* The file offset of the function pc, found through /proc/self/maps (uprobeMultiProbeTarget). Returns 0 on success, -1 with *err on failure. */
 static int self_offset(uint64_t pc, uint64_t *off, char **err)
 {
 	char exe[4096];
@@ -187,10 +194,10 @@ int lv_multi_link_probe(struct bml_live *l, const char *pt_name, const char *at_
 			goto unknown;
 		}
 	}
-
+	/* the feature probe (cilium runs it before looking at EINVAL; the uprobe case returned EINVAL first) */
 	char *ft = NULL;
 	int h = BML_MUT("live.multi_link_eopnotsupp") ? 1 : have_link(l, at, &ft);
-	if (h == 1) {
+	if (h == 1) { /* ErrNotSupported: false */
 		free(ft);
 		goto out;
 	}

@@ -1,3 +1,6 @@
+/* Arena copy.
+ * The arena mapping pointer never escapes this file, and the object stays acquired for the
+ * whole memmove, so a concurrent close of the object cannot unmap the memory being copied. */
 #include "abi/map_internal.h"
 #include "load/arena.h"
 #include "util/mutation.h"

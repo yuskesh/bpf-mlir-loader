@@ -1,3 +1,5 @@
+/* C port of the Go reference (bindrt, rejected.go): of all annotation lines in a verifier log,
+ * only the nearest one before the last instruction is taken. */
 #include "abi/rejected.h"
 
 #include <string.h>
@@ -6,7 +8,8 @@ static int digit(unsigned char c) { return c >= '0' && c <= '9'; }
 static int name_byte(unsigned char c)
 { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || digit(c) || c == '_' || c == '.' || c == '/' || c == '-'; }
 
-
+/* The equivalent of Go strings.TrimSpace(line) == "". Matching the name or the instruction
+ * itself does not trim. */
 static int blank(const char *p, size_t n)
 {
 	for (size_t i = 0; i < n;) {
@@ -51,7 +54,7 @@ int bml_rejected_at(const char *log, size_t n, char *out, size_t cap)
 	if (!log || !out || !cap) return 0;
 	const char *end_line = NULL, *nearest = NULL, *chosen = NULL;
 	size_t end_n = 0, nearest_n = 0, chosen_n = 0;
-
+	/* Find the last non-blank line first; annotations after the rejected instruction cannot replace chosen. */
 	for (size_t i = 0; i < n;) {
 		const char *p = log + i, *nl = memchr(p, '\n', n - i);
 		size_t len = nl ? (size_t)(nl - p) : n - i;

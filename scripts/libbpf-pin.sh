@@ -1,4 +1,12 @@
 #!/bin/bash
+# scripts/libbpf-pin.sh — pins the hash of the libbpf sources that the load guard (src/load/) depends on. Upgrading libbpf
+# makes the gate fail and forces a new audit of the guard's assumptions: how libbpf decides to sanitize and rewrites
+# the object, that libbpf throws the whole BTF away when the kernel rejects it, that libbpf strips the BTF of a typed map
+# (a devmap), that libbpf replaces some helper calls, the values of feat_supported and kern_feature_id, and the memlock and
+# token options. The hash covers whole files, which is stricter than the ranges the guard relies on, so every libbpf
+# upgrade is audited again.
+#
+#   scripts/libbpf-pin.sh [--check] [LIBBPF_SRC_DIR]     # default third_party/libbpf/src. --check compares with the table; without it the table is written
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TABLE="$HERE/scripts/libbpf-pin.tsv"

@@ -1,3 +1,5 @@
+/* caps/live_host.c — queries about the host: a C port of kload's Arch (the machine field of uname) and HasKernelSymbol (the
+ * third column of /proc/kallsyms). When the file cannot be read or the call fails the answer is Unknown, as in kload. */
 #include "caps/live.h"
 
 #include <errno.h>
@@ -25,7 +27,7 @@ int bml_live_arch(char **out, char **msg)
 	return BML_Q_OK;
 }
 
-
+/* The separators of Go's strings.Fields (the ASCII range is enough; kallsyms is ASCII) */
 static int is_space(char c)
 {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
@@ -66,7 +68,7 @@ int bml_live_kernel_symbol(const char *name, int *out, char **msg)
 		size_t e = i;
 		while (e < b.len && b.p[e] != '\n')
 			e++;
-
+		/* the third field of the line (fields are separated by whitespace) */
 		size_t k = i, field = 0;
 		while (k < e) {
 			while (k < e && is_space(b.p[k]))

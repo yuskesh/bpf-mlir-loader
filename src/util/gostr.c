@@ -1,3 +1,4 @@
+/* gostr.c — copies of Go's strconv (decimal) and %q. */
 #include "util/gostr.h"
 #include "util/mutation.h"
 
@@ -6,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-
+/* The body of ParseUint: decimal digits only (at least one). A value beyond the range of bits gives -1. */
 static int parse_digits(const char *s, size_t n, int bits, uint64_t *out)
 {
 	if (n == 0)
@@ -122,7 +123,8 @@ void bml_buf_addf(struct bml_buf *b, const char *fmt, ...)
 	b->len += (size_t)k;
 }
 
-
+/* Length of a valid multi-byte UTF-8 character (overlong forms, surrogates and values above U+10FFFF are
+ * rejected); 0 if it is not valid. */
 static size_t utf8_len(const unsigned char *s, size_t n)
 {
 	unsigned c = s[0];

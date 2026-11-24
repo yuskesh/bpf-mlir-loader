@@ -1,3 +1,13 @@
+/* abi/globals.c — the configured values of .rodata, passed as load arguments, and bml_global_get.
+ * Design decisions: the values given with "set" are load arguments and keep no state in the process;
+ * "optional" and CONFIG_NOT_SET belong to the loader's side of the declaration.
+ *
+ * The config document is {"set": {"<name>": <bits>}, "optional": ["<name>"]}; an empty document has
+ * neither set nor optional. It is checked against the globals of maps.json, which are themselves
+ * already checked against the ELF symbols, the DATASEC and the types of the VARs: every name in set
+ * or optional must be a declared .rodata global, a value must fit the declared width, and every
+ * declared .rodata global must be either set or optional. A missing one is CONFIG_NOT_SET, reported
+ * for all the names at once, before any kernel object exists. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -12,7 +22,8 @@
 #include "json/json.h"
 #include "util/gostr.h"
 
-
+/* The width in bits of u8 … i64 (a "be" suffix is allowed, the same spelling as the check accepts). A
+ * misspelt type gives 0; the check of the declaration stops it earlier. */
 static int type_bits(const char *t)
 {
 	if (t[0] != 'u' && t[0] != 'i')
@@ -122,7 +133,7 @@ int64_t abi_config(const char *cfg, int64_t cfg_len, const struct bml_map_decls 
 		}
 		(*vals)[(*n_vals)++] = (struct bml_rodata_value){off, (uint32_t)size, bits};
 	}
-	if (!e) {
+	if (!e) { /* CONFIG_NOT_SET: the declared .rodata globals that are neither set nor optional, all of them in declaration order. */
 		struct bml_buf b = {0};
 		size_t missing = 0;
 		for (size_t i = 0; i < d->n_globals; i++)
@@ -181,7 +192,7 @@ void abi_globals_free(struct abi_object *o)
 	o->n_globals = 0;
 }
 
-
+/* Reads one declaration ({name, section, type}, an element of the globals of maps.json). -1 on failure. */
 static int parse_global(const char *s, int64_t n, char **name, char **section, char **type)
 {
 	struct bml_json *j = NULL;
@@ -228,7 +239,7 @@ static int64_t global_get_body(int64_t obj, const char *decl, int64_t decl_len)
 	else if (strcmp(g->section, section) || strcmp(g->type, type))
 		e = abi_fail(BML_MAP_MISMATCH, "bml: global %s: declared here as %s %s, but the object was loaded with %s %s", name, section, type, g->section, g->type);
 	else {
-
+		/* Read the value of the section's internal map (named by a libbpf suffix): the width in question, at the symbol's offset. */
 		struct bpf_map *m, *sm = NULL;
 		char suffix[16];
 		snprintf(suffix, sizeof suffix, ".%s", section);
@@ -258,7 +269,7 @@ static int64_t global_get_body(int64_t obj, const char *decl, int64_t decl_len)
 	return e;
 }
 
-
+/* Counted as a running call of the object (see the note in run.c). */
 int64_t bml_global_get(int64_t obj, const char *decl, int64_t decl_len)
 {
 	int64_t e;

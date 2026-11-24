@@ -1,3 +1,8 @@
+/* load/post.c — the guards after the load. They check that the BTF was loaded into the kernel; that the bytes of the BTF
+ * in the kernel are the same as the object's BTF (after finalize; sanitize works only on a copy, so a difference means
+ * libbpf rewrote it); the program's BTF id; that the kernel's func_info / line_info records are a non-empty ordered
+ * subsequence of the object's records (the verifier's pruning of dead code reduces the count); and that the BTF key /
+ * value ids and the flags of each map are the same as libbpf's definition at open time (the values read from the ELF). */
 #include "load/internal.h"
 
 #include <errno.h>
@@ -47,7 +52,7 @@ void lb_free_maps(struct lb_map_def *defs, size_t n)
 	free(defs);
 }
 
-
+/* Read back the bytes of the BTF that was loaded into the kernel (two calls: the size, then the contents). Success is 0 with *out (malloc'd), *len and *id set. */
 static int btf_readback(int fd, uint8_t **out, uint32_t *len, uint32_t *id)
 {
 	struct bpf_btf_info info;
@@ -73,19 +78,21 @@ static int btf_readback(int fd, uint8_t **out, uint32_t *len, uint32_t *id)
 	return 0;
 }
 
-
-
-
-
+/* Are the kernel's func_info / line_info records a non-empty subsequence of the object's records, in the same order?
+ * (This replaced an earlier rule that required equal counts.) The verifier prunes code made dead by frozen .rodata
+ * constants and drops the line_info of that range (and the func_info of a subprogram that disappeared entirely), so
+ * requiring an exact count rejected a legitimate load (seen with spinel's pollwatch program). The cases where libbpf
+ * drops the ext_info (count 0) and where records are rewritten are still stopped. A match is 0; a difference is 1
+ * with the reason written to why; -errno if the kernel's info cannot be read. */
 static int ext_info_subseq(int fd, struct bpf_program *p, const struct bpf_prog_info *pi, char *why, size_t cap)
 {
 	uint32_t ofi = bpf_program__func_info_cnt(p), oli = bpf_program__line_info_cnt(p);
 	const struct bpf_func_info *of = bpf_program__func_info(p);
 	const struct bpf_line_info *ol = bpf_program__line_info(p);
 	uint32_t kfi = pi->nr_func_info, kli = pi->nr_line_info;
-	if (BML_MUT("load.ext_info_exact"))
+	if (BML_MUT("load.ext_info_exact")) /* the earlier form (exact count match) */
 		return kfi == ofi && kli == oli ? 0 : (snprintf(why, cap, "the counts differ"), 1);
-	if (BML_MUT("load.linfo_kernel_zero"))
+	if (BML_MUT("load.linfo_kernel_zero")) /* the form where libbpf dropped the line_info */
 		kli = 0;
 	if (kfi > ofi || kli > oli || (ofi && !kfi) || (oli && !kli)) {
 		snprintf(why, cap, "the counts are not a non-empty part of the object's");
@@ -107,9 +114,9 @@ static int ext_info_subseq(int fd, struct bpf_program *p, const struct bpf_prog_
 		rc = -errno;
 		goto out;
 	}
-	if (kli && BML_MUT("load.linfo_kernel_bad"))
+	if (kli && BML_MUT("load.linfo_kernel_bad")) /* the form where the kernel's record does not exist in the object */
 		kl[kli - 1].line_off ^= 1;
-
+	/* func_info: a subsequence of type_id. line_info: a subsequence of (file_name_off, line_off, line_col); insn_off moves with pruning. */
 	uint32_t j = 0;
 	for (uint32_t i = 0; i < kfi; i++) {
 		while (j < ofi && of[j].type_id != kf[i].type_id)
@@ -189,8 +196,8 @@ int lb_check_loaded(struct bpf_object *obj, const struct lb_map_def *defs, size_
 			return lb_fail(r, BML_LOAD_MAP_BTF,
 				       "map %s: the kernel has BTF key %u / value %u (BTF %u), the ELF %u / %u — libbpf dropped the map's BTF (M1 / M2)",
 				       defs[i].name, mi.btf_key_type_id, mi.btf_value_type_id, mi.btf_id, defs[i].key_id, defs[i].value_id);
-		
-
+		/* libbpf may remove a flag (BPF_F_MMAPABLE of an internal map), and the kernel may add flags of its own (BPF_F_RDONLY_PROG on a devmap;
+		 * bpf-mlir's dm_redirect_after test input caught this), so check that every flag of the definition is present in the kernel */
 		if (defs[i].flags & ~mi.map_flags)
 			return lb_fail(r, BML_LOAD_MAP_FLAGS, "map %s: the kernel has flags 0x%x without 0x%x of the object's 0x%x — libbpf dropped them (P3)",
 				       defs[i].name, mi.map_flags, defs[i].flags & ~mi.map_flags, defs[i].flags);

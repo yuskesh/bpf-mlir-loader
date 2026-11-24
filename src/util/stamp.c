@@ -1,3 +1,7 @@
+/* util/stamp.c — the version facts stamped at build time (source form, source commit, dirty flag and the pinned bpf-mlir commit).
+ * scripts/build-libs.sh generates bml_stamp.h (scripts/stamp-lib.sh) on the include path of this object only in the product build.
+ * Other builds (test tools, fuzzing) have no such header and get the "none" form. No other object refers to this one, so a
+ * program that does not call these functions does not link it (the rest of libbml.a stays byte-comparable across commits). */
 #include "bml/bml.h"
 
 #if __has_include("bml_stamp.h")

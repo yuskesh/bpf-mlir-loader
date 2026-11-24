@@ -1,3 +1,4 @@
+/* Port of the ksymvar.go parsing of the guarded suffix and of the guard rows. */
 #include "req/parse_internal.h"
 
 #include <stdlib.h>

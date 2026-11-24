@@ -1,3 +1,5 @@
+/* Compare the declared arena with constants read independently from the ELF and BTF. The size of initial_value is
+ * never used. */
 #include "maps/arena.h"
 #include "maps/internal.h"
 #include "btf/kernel.h"
@@ -39,7 +41,7 @@ static int constant(const struct bml_kbtf *b, uint32_t id, int wide, uint64_t *v
 		*value = bml_kbtf_u32(b, t.aux + 8); return 0;
 	}
 	if (!wide || t.vlen != 1) return -1;
-	if (t.kind == KBTF_ENUM) {
+	if (t.kind == KBTF_ENUM) { /* libbpf get_map_field_long assigns enum's signed int32 value. */
 		*value = (uint64_t)(int64_t)(int32_t)bml_kbtf_u32(b, t.aux + 4); return 0;
 	}
 	if (t.kind == KBTF_ENUM64) {
@@ -112,9 +114,9 @@ int md_check_arena_decl(const struct bml_requirements *req, const struct bml_map
 	char *err = NULL; struct bml_arena_spec d, e;
 	if (count != 1) err = md_xstrdup("the arena copy contract requires exactly one arena");
 	else if (!m->has_map_extra) err = md_xstrdup("arena map_extra must be declared (zero is distinct from missing)");
-	else if (bml_arena_shape(m->max_entries, m->flags, m->map_extra, &d, &err)) {                            }
+	else if (bml_arena_shape(m->max_entries, m->flags, m->map_extra, &d, &err)) { /* named domain failure */ }
 	else if (!elf) err = md_xstrdup("arena map_extra check requires the ELF, not only requirements");
-	else if (bml_arena_elf(elf, len, m->name, &e, &err)) {                                   }
+	else if (bml_arena_elf(elf, len, m->name, &e, &err)) { /* independent ELF/BTF failure */ }
 	else if (d.address != e.address || d.length != e.length || d.pages != e.pages || d.flags != e.flags)
 		err = md_xstrdup("arena declaration map_extra/address/length differs from ELF/BTF");
 	else return 0;
@@ -126,7 +128,7 @@ int bml_check_arena_decls(const struct bml_requirements *req,const void *elf,siz
 	const struct bml_map_decls *decls,int require_all,struct bml_map_problems *out)
 {
 	memset(out,0,sizeof *out);
-
+	/* Do not rely on the arena rows of requirements format 29: an ELF of format 22 has arena maps without arena rows (the compatibility exception of format 29) and needs this guard too. */
 	for(size_t i=0;i<req->n_maps;i++) {
 		const struct bml_map *row=&req->maps[i];
 		if(strcmp(row->map_type.p,"arena"))continue;

@@ -1,3 +1,4 @@
+/* json/lex.c — lexical analysis (errors, white space, strings, numbers, literals). Split out of json.c. */
 #include "json/internal.h"
 
 #include <stdarg.h>
@@ -34,7 +35,8 @@ void json_skip_ws(struct parser *p)
 	}
 }
 
-
+/* The length of one UTF-8 character (overlong forms, surrogates and out-of-range values are rejected); 0 if it is
+ * invalid. */
 size_t json_utf8_seq(const unsigned char *s, size_t n)
 {
 	unsigned c = s[0];
@@ -102,7 +104,7 @@ void json_put_utf8(struct bml_buf *b, uint32_t cp)
 	bml_buf_add(b, t, n);
 }
 
-
+/* p->pos is just after the opening ". Advance to just after the closing " and return the unescaped bytes. */
 int json_parse_string(struct parser *p, char **out, size_t *out_len)
 {
 	struct bml_buf b = {0};
@@ -145,7 +147,8 @@ int json_parse_string(struct parser *p, char **out, size_t *out_len)
 					return -1;
 				}
 				if (cp >= 0xd800 && cp <= 0xdbff) {
-
+					/* Go's strictScanner: unless the next escape is a \u escape of four hex digits that is a low surrogate (a digit
+					 * error counts too), the result is unpaired_surrogate */
 					uint32_t lo = 0;
 					int ok2 = p->len - p->pos >= 6 && p->s[p->pos] == '\\' && p->s[p->pos + 1] == 'u';
 					if (ok2) {
@@ -163,7 +166,7 @@ int json_parse_string(struct parser *p, char **out, size_t *out_len)
 						}
 					}
 					if (!ok2) {
-						if (p->lenient) {
+						if (p->lenient) { /* encoding/json: emit U+FFFD and read the next escape separately */
 							json_put_utf8(&b, 0xfffd);
 							continue;
 						}
@@ -179,7 +182,7 @@ int json_parse_string(struct parser *p, char **out, size_t *out_len)
 					bml_buf_free(&b);
 					return json_fail(p, BML_JR_UNPAIRED_SURROGATE, "unpaired surrogate");
 				}
-				if (cp == 0 && !p->lenient) {
+				if (cp == 0 && !p->lenient) { /* a string in the checked input cannot contain NUL (reported at the same position as Go's strictScanner) */
 					bml_buf_free(&b);
 					return json_fail(p, BML_JR_NUL, "\\u0000 in a string");
 				}
@@ -194,7 +197,7 @@ int json_parse_string(struct parser *p, char **out, size_t *out_len)
 			continue;
 		}
 		size_t k = json_utf8_seq(p->s + p->pos, p->len - p->pos);
-		if (!k && p->lenient) {
+		if (!k && p->lenient) { /* encoding/json: one U+FFFD for each invalid byte */
 			json_put_utf8(&b, 0xfffd);
 			p->pos++;
 			continue;

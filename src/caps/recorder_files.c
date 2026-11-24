@@ -1,3 +1,6 @@
+/* caps/recorder_files.c — the queries of Recorder whose answers are files, a C port of UprobeBinary of go/requirements/recorder.go and of
+ * UprobeDebugFile. It was split out of recorder.c. For uprobe_debug the file is the path that the caps underneath opened (for live caps
+ * this is absolute, the Name of the reader); if there is no path the answer is Unknown. */
 #include "caps/recorder_internal.h"
 
 #include <stdlib.h>

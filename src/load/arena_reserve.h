@@ -1,3 +1,4 @@
+/* Private reservation only. libbpf mapping ownership is tracked by the load transaction. */
 #ifndef BML_LOAD_ARENA_RESERVE_H
 #define BML_LOAD_ARENA_RESERVE_H
 #include <stddef.h>

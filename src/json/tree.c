@@ -1,3 +1,4 @@
+/* json/tree.c — rule names, freeing the tree and reading values. Split out of json.c. */
 #include "json/internal.h"
 
 #include <stdarg.h>
@@ -50,7 +51,7 @@ const struct bml_json *bml_json_get(const struct bml_json *obj, const char *key)
 	const struct bml_json *v = NULL;
 	for (size_t i = 0; i < obj->n; i++)
 		if (obj->members[i].key_len == n && memcmp(obj->members[i].key, key, n) == 0)
-			v = obj->members[i].value;
+			v = obj->members[i].value; /* the last one wins (keys that validate rewrote after case folding can collide) */
 	return v;
 }
 

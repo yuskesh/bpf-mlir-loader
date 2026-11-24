@@ -1,3 +1,7 @@
+/* req/kfunc_profile.c — deriving the initial profile that says which kfuncs a program may use (a port of deriveKfuncProfiles and
+ * canonicalKfuncProfile in bpf-mlir's go/requirements/kfunc_profile.go, and of Go's json.Marshal(Attach) as used by ContextIdentity). Only FromELF
+ * derives profiles; a document that was only parsed has none. The requirements do not change after FromELF, so Go's snapshot comparison is not
+ * needed (the uniqueness of programs is checked when the profiles are derived). */
 #include "req/kfunc_profile.h"
 
 #include <stdio.h>
@@ -17,7 +21,7 @@ static const struct prow {
 	{"xdp", "xdp", "xdp", "xdp", "", "none", 6, 0, 0},
 	{"sched_cls", "tcx/ingress", "sched_cls", "tcx_ingress", "tcx", "ingress", 3, 0, 0},
 	{"sched_cls", "tcx/egress", "sched_cls", "tcx_egress", "tcx", "egress", 3, 0, 0},
-	{"sched_cls", "netkit/primary", "sched_cls", "netkit_primary", "netkit", "primary", 3, 0, 0},
+	{"sched_cls", "netkit/primary", "sched_cls", "netkit_primary", "netkit", "primary", 3, 0, 0}, /* netkit */
 	{"sched_cls", "netkit/peer", "sched_cls", "netkit_peer", "netkit", "peer", 3, 0, 0},
 	{"cgroup_skb", "cgroup_skb/ingress", "cgroup_skb", "cgroup_inet_ingress", "cgroup_inet_ingress", "cgroup", 8, 0, 0},
 	{"cgroup_skb", "cgroup_skb/egress", "cgroup_skb", "cgroup_inet_egress", "cgroup_inet_egress", "cgroup", 8, 0, 0},
@@ -53,7 +57,7 @@ static void jstr(struct bml_buf *b, const struct bml_str *s)
 static void jstrs(struct bml_buf *b, const struct bml_str *v, size_t n)
 {
 	if (!n) {
-		bml_buf_adds(b, "null");
+		bml_buf_adds(b, "null"); /* Go's nil slice */
 		return;
 	}
 	bml_buf_adds(b, "[");
@@ -142,7 +146,8 @@ void bml_req_attach_json(struct bml_buf *b, const struct bml_attach *a, int blan
 	bml_buf_adds(b, "}");
 }
 
-
+/* canonicalKfuncProfile: 0 when the profile could be derived (everything except the section of *e is filled), -1 when it could not (there is no
+ * table row, or the row does not match). */
 static int canonical(const char *section, const struct bml_program *p, const struct bml_attach **as, size_t nas, struct bml_kfunc_profile_entry *e)
 {
 	for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
@@ -240,7 +245,7 @@ static int derive_one(const struct bml_elf *elf, const struct bml_elf_sym *syms,
 		named += !strcmp(elf->sections[i].name, sec->name);
 	for (size_t i = 0; i < nsyms; i++)
 		entries += syms[i].shndx == found->shndx && BML_ST_TYPE(syms[i].info) == BML_STT_FUNC && syms[i].value == 0;
-	if (named != 1 || entries != 1 || sec->type != 1                    || !(sec->flags & BML_SHF_EXECINSTR) || found->size == 0 || found->value != 0 ||
+	if (named != 1 || entries != 1 || sec->type != 1 /* SHT_PROGBITS */ || !(sec->flags & BML_SHF_EXECINSTR) || found->size == 0 || found->value != 0 ||
 	    found->size % 8 != 0 || found->size > sec->size)
 		return (e->reason = strdup("actual ELF entry bounds are invalid")) ? 0 : -2;
 	const struct bml_attach **as = calloc(r->n_attaches ? r->n_attaches : 1, sizeof *as);
@@ -254,7 +259,7 @@ static int derive_one(const struct bml_elf *elf, const struct bml_elf_sym *syms,
 	free(as);
 	if (rc == -2)
 		return -2;
-	if (rc)
+	if (rc) /* Go: reason = err.Error() (this includes the ErrUnknown text; kfuncProfileFor prefixes it once more) */
 		return (e->reason = strdup(UNK ": section/program/attach has no canonical initial profile")) ? 0 : -2;
 	return (e->section = strdup(sec->name)) ? 0 : -2;
 }

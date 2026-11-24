@@ -1,3 +1,10 @@
+/* abi/hash.c — get, put and delete on hash and lru_hash maps, and the iterator (the iterator of a
+ * per-CPU map is opened by percpu.c too).
+ * The semantics follow the downstream mojo loader's hash.go: the key and value sizes are checked
+ * (MAP_MISMATCH); a missing key is OK with value 0; iterate follows cilium v0.22's MapIterator
+ * (get_next_key and lookup; an ENOENT from the lookup, meaning a concurrent delete, is skipped and
+ * the next key is taken; more than max_entries steps give BML_OTHER). A closed iterator stays in the
+ * table: a second close is OK, and next on a closed iterator is STATE. */
 #define _GNU_SOURCE
 #include "abi/map_internal.h"
 
@@ -15,7 +22,7 @@
 
 static const char *const hash_kinds[] = {"hash", "lru_hash", NULL};
 
-
+/* The declaration, the records (one for the key, one for the value) and the sizes (vlen < 0 skips the value, as for delete). */
 static int64_t open_hash(int64_t obj, const char *decl, int64_t dl, const char *km, int64_t kl, const char *vm, int64_t vl,
 			 int64_t klen, int64_t vlen, struct abi_map *m)
 {
@@ -86,7 +93,7 @@ int64_t bml_hash_delete(int64_t obj, const char *decl, int64_t dl, const char *k
 	return e;
 }
 
-
+/* ---- iterator ---- */
 
 int64_t abi_iter_open(struct abi_map *m, int64_t obj, int64_t klen, int64_t vlen, int percpu)
 {
@@ -131,7 +138,8 @@ int64_t bml_hash_iter_open(int64_t obj, const char *decl, int64_t dl, const char
 	return e;
 }
 
-
+/* Advances by one (a port of cilium's MapIterator.Next). 1: an entry exists (key and value); 0: the end;
+ * -1: an error (*err is the errno); -2: more than max_entries steps. */
 static int iter_step(struct abi_iter *it, uint8_t *k, uint8_t *v, int *err)
 {
 	size_t stride = (it->elem + 7) / 8 * 8;
@@ -159,7 +167,7 @@ static int iter_step(struct abi_iter *it, uint8_t *k, uint8_t *v, int *err)
 		it->started = 1;
 		memcpy(it->cursor, k, it->klen);
 		if (bpf_map_lookup_elem(it->fd, k, raw) != 0) {
-			if (errno == ENOENT)
+			if (errno == ENOENT) /* a concurrent delete: go on to the next key */
 				continue;
 			*err = errno;
 			rc = -1;
@@ -185,7 +193,7 @@ int64_t bml_hash_iter_next(int64_t iter, uint8_t *kdst, int64_t klen, uint8_t *v
 	if (!it)
 		return abi_fail(BML_STATE, "bml: no map iterator %lld", (long long)iter);
 	int64_t e;
-	struct abi_object *o = abi_object_acquire(it->obj, &e);
+	struct abi_object *o = abi_object_acquire(it->obj, &e); /* a running call of the object (a close of the object then gives STATE; it does not wait) */
 	if (!o)
 		return e;
 	pthread_mutex_lock(&it->mu);
@@ -216,7 +224,7 @@ int64_t bml_hash_iter_next(int64_t iter, uint8_t *kdst, int64_t klen, uint8_t *v
 	return e;
 }
 
-
+/* Closes the iterator but keeps it in the table, so a second close is OK. The caller holds the mutex. */
 static void iter_close_locked(struct abi_iter *it)
 {
 	if (!it->closed) {
@@ -241,7 +249,7 @@ int64_t bml_hash_iter_close(int64_t iter)
 	abi_unlock();
 	if (!it)
 		return abi_fail(BML_STATE, "bml: no map iterator %lld", (long long)iter);
-	if (pthread_mutex_trylock(&it->mu) != 0)
+	if (pthread_mutex_trylock(&it->mu) != 0) /* does not wait: STATE if another thread is inside next */
 		return abi_fail(BML_STATE, "bml: the map iterator %lld (%s) has a next in flight on another thread — close it again after it returns",
 				(long long)iter, it->name);
 	iter_close_locked(it);
@@ -249,7 +257,7 @@ int64_t bml_hash_iter_close(int64_t iter)
 	return abi_ok(0);
 }
 
-
+/* Called when the object is closed (from owned.c): closes the iterator but does not remove it from the table (next on a closed iterator is STATE). */
 void abi_iter_free(void *p)
 {
 	iter_close(p);

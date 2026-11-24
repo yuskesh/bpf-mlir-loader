@@ -1,3 +1,5 @@
+/* abi/tp_cpus.c — choosing the CPUs of a tracepoint attach: a port of the Go reference functions
+ * ParseCPUList, SelectCPUs and readCPUs of the tpattach package. */
 #define _GNU_SOURCE
 #include "abi/tp_cpus.h"
 
@@ -31,7 +33,7 @@ int bml_tp_parse_cpus(const char *s0, int **out, size_t *n, char **err)
 	*out = NULL, *n = 0, *err = NULL;
 	size_t len = strlen(s0);
 	const char *s = s0;
-	while (len && is_space(*s))
+	while (len && is_space(*s)) /* strings.TrimSpace (ASCII only: the input is a sysfs file) */
 		s++, len--;
 	while (len && is_space(s[len - 1]))
 		len--;

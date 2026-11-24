@@ -1,4 +1,9 @@
-#define _GNU_SOURCE
+/* json/goscan.c — a port of bpf-mlir's scanStrictJSON (go/requirements/strictjson.go) that gives Go's own rule, byte offset and
+ * detail text for each of its 25 failure sites. It serves the build-time exports; the product's checks keep using lex.c and
+ * parse.c, which compare only the rule. It also checks the float64 range of numbers decoded into Go's `any`.
+ *
+ * A quoted key that bml_json_go_key_quotable refuses sets key_quote (Go escapes non-printable characters bml keeps). */
+#define _GNU_SOURCE /* strtod_l */
 #include "json/goscan.h"
 #include "json/internal.h"
 
@@ -36,8 +41,8 @@ static void skip_space(struct gs *s)
 		s->pos++;
 }
 
-
-
+/* Go's %q of a byte (fmt formats a uint8 as the rune U+00XX with strconv.QuoteRune). unicode.IsPrint is false for U+0080..U+00A0
+ * and U+00AD in this range, true for the rest of U+00A1..U+00FF and for ASCII 0x20..0x7e. */
 static void quote_byte(struct bml_buf *b, unsigned c)
 {
 	const char *named = NULL;
@@ -89,8 +94,8 @@ static int hex4(const unsigned char *p, size_t n, uint32_t *out)
 	return 1;
 }
 
-
-
+/* strictScanner.str: s->pos is at the opening quote. The decoded bytes go to *out (NUL-terminated, malloc) when out is not NULL;
+ * they never contain NUL (\u0000 is the rule nul, a raw byte below 0x20 is syntax). */
 static int str(struct gs *s, char **out)
 {
 	struct bml_buf b = {0}, m = {0};
@@ -163,7 +168,7 @@ static int str(struct gs *s, char **out)
 					char t = (char)e;
 					bml_buf_add(&m, &t, 1);
 				} else {
-					json_put_utf8(&m, e);
+					json_put_utf8(&m, e); /* %c of a byte is the rune U+00XX */
 				}
 				goto fail;
 			}
@@ -246,8 +251,8 @@ static int number(struct gs *s)
 
 static int value(struct gs *s, const struct bml_json_desc *t, int depth);
 
-
-
+/* strings.ToLower of a key compared with ASCII field names: only ASCII letters and U+212A (KELVIN SIGN → 'k') lower to ASCII;
+ * any other non-ASCII character makes the lowered key non-ASCII, so it matches no field. Returns 0 when it cannot match. */
 static int lower_key(const char *k, char *out, size_t cap)
 {
 	size_t o = 0;
@@ -452,8 +457,8 @@ void bml_json_goerr_free(struct bml_json_goerr *e)
 	e->detail = NULL;
 }
 
-
-
+/* The float64 range check: the first number (document order) whose value rounds beyond the float64 range (strtod in the C locale: ±HUGE_VAL).
+ * An underflow to 0 is not an error (strconv.ParseFloat neither). Returns 1 and *spelling (inside the tree) when found. */
 static int out_of_range(const struct bml_json *j, locale_t c, const char **spelling)
 {
 	switch (j->type) {

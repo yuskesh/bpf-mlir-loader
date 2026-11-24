@@ -1,3 +1,7 @@
+/* req/check_v9.c — judgement version 7 (a port of checkAttachType, checkGenericAttach and checkCtxAccesses in bpf-mlir's
+ * go/requirements/requirements.go). A false answer gives attach_type, attach_target or ctx_access (which block the load); an answer that
+ * cannot be decided, or caps without the query, gives *_unknown (which does not block). Each (program, attach type) pair is asked about once
+ * across the generic attach rows and ctxaccess. A mechanism name and "-" do not ask about attach_type. */
 #include "req/check_internal.h"
 
 #include <stdlib.h>
@@ -5,7 +9,7 @@
 
 #include "util/mutation.h"
 
-int req_attach_mechanism(const char *s, size_t n);
+int req_attach_mechanism(const char *s, size_t n); /* parse_v9.c */
 
 static const struct bml_program *program_of(const struct bml_requirements *r, const char *sym)
 {
@@ -24,7 +28,7 @@ void ck_asked_free(struct ck *c)
 	c->n_asked = c->cap_asked = 0;
 }
 
-
+/* Has it been asked already? (If not, record it and return 0.) */
 static int asked_once(struct ck *c, const char *program, const char *at)
 {
 	size_t lp = strlen(program), la = strlen(at);
@@ -52,7 +56,7 @@ static int asked_once(struct ck *c, const char *program, const char *at)
 	return 0;
 }
 
-
+/* checkAttachType: 0 to continue, -1 for a checking error. */
 int ck_check_attach_type(struct ck *c, const char *program, const char *at)
 {
 	if ((!strcmp(at, "-") || req_attach_mechanism(at, strlen(at))) && !BML_MUT("check.mechanism_asks_attach_type"))
@@ -76,7 +80,7 @@ int ck_check_attach_type(struct ck *c, const char *program, const char *at)
 	if (st != BML_Q_OK)
 		return ck_fail(c, msg);
 	free(msg);
-
+	/* A loader that attaches sk_skb / sk_msg with BPF_PROG_ATTACH (sockmap_attach prog_attach) does not need a sockmap link. */
 	if (!has && (!strcmp(p->prog_type.p, "sk_skb") || !strcmp(p->prog_type.p, "sk_msg"))) {
 		const struct bml_loader_decl *d = ck_loader_of(c);
 		if (d->sockmap_attach && !strcmp(d->sockmap_attach, "prog_attach"))
@@ -87,8 +91,8 @@ int ck_check_attach_type(struct ck *c, const char *program, const char *at)
 	return 0;
 }
 
-
-
+/* staticMapTarget: a map:<sym> target of sockmap / sockhash or struct_ops is answered from the map rows of the same ELF.
+ * Returns 0 when it does not answer (ask the caps) and 1 when it did (*mismatch is the mismatch text or NULL). */
 static int static_map_target(const struct bml_requirements *r, const struct bml_attach *a, char **mismatch)
 {
 	static const char *const sk[] = {"sockmap", "sockhash"}, *const so[] = {"struct_ops"};
@@ -150,8 +154,8 @@ int ck_check_generic_attach(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
-
+/* checkFmodRet (format 10): the signature (retsig, as for fexit), the integer arguments (farg, checked through func_param) and whether the function
+ * exists (func). The Unmet kinds are the existing ones. */
 int ck_check_fmod_ret(struct ck *c, const struct bml_attach *a)
 {
 	const char *P = a->program.p, *T = a->target.p;

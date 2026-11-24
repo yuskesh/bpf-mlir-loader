@@ -1,3 +1,4 @@
+/* req/check_target_rows.c — port of checkHelperTargets, checkNetkit and checkSleepable of bpf-mlir's go/requirements package. */
 #include "req/check_internal.h"
 #include "req/parse_internal.h"
 
@@ -7,13 +8,13 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* needsHelperTarget: the d_path helper of a Tracing program needs a target. */
 int ck_needs_helper_target(const struct bml_program *p, const struct bml_helper *h)
 {
 	return (req_str_eq_lit(&p->prog_type, "tracing") || p->prog_type_id == 26) && (h->id == 147 || req_str_eq_lit(&h->name, "d_path"));
 }
 
-
+/* Ask about every row of the group first, then report the errors together (like Go's errors.Join: the lines are joined with \n). */
 int ck_check_helper_targets(struct ck *c)
 {
 	const struct bml_requirements *r = c->req;

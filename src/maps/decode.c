@@ -1,3 +1,4 @@
+/* maps/decode.c — reading maps.json (Go's MapDecls with embedded MapDeclOptions, via DecodeStrictJSON; JSON rules: section 13 of the requirements-format specification). Split out of mapdecl.c. */
 #include "maps/internal.h"
 
 #include <stdarg.h>
@@ -9,7 +10,7 @@
 #include "json/json.h"
 #include "util/gostr.h"
 
-
+/* ---- maps.json (Go's MapDecls, which embeds MapDeclOptions, with DisallowUnknownFields) ---- */
 
 void bml_map_decl_free(struct bml_map_decl *x)
 {
@@ -98,7 +99,7 @@ static int juint(const struct bml_json *o, const char *key, int bits, int *set, 
 	return 0;
 }
 
-
+/* The type description (Go's MapDecls, including the fields of the embedded MapDeclOptions). */
 static const struct bml_json_desc md_string = {.kind = BML_JD_STRING};
 static const struct bml_json_desc md_bool = {.kind = BML_JD_BOOL};
 static const struct bml_json_desc md_u64 = {.kind = BML_JD_UINT, .bits = 64};
@@ -110,12 +111,12 @@ static const struct bml_json_field mf_record[] = {{"size", &md_u32}, {"members",
 static const struct bml_json_desc md_record = {.kind = BML_JD_STRUCT, .fields = mf_record, .n_fields = 2};
 static const struct bml_json_desc md_records = {.kind = BML_JD_MAP, .child = &md_record};
 static const struct bml_json_field mf_inner[] = {{"kind", &md_string}, {"key", &md_string}, {"value", &md_string}, {"max_entries", &md_u64}, {"flags", &md_u64}};
-static const struct bml_json_desc md_inner = {.kind = BML_JD_STRUCT, .fields = mf_inner, .n_fields = 5};
+static const struct bml_json_desc md_inner = {.kind = BML_JD_STRUCT, .fields = mf_inner, .n_fields = 5}; /* inner-map template (bpf-mlir map-in-map support) */
 static const struct bml_json_field mf_sop_op[] = {{"member", &md_string}, {"program", &md_string}};
 static const struct bml_json_desc md_sop_op = {.kind = BML_JD_STRUCT, .fields = mf_sop_op, .n_fields = 2};
 static const struct bml_json_desc md_sop_ops = {.kind = BML_JD_ARRAY, .child = &md_sop_op};
 static const struct bml_json_field mf_sop[] = {{"type", &md_string}, {"name", &md_string}, {"ops", &md_sop_ops}};
-static const struct bml_json_desc md_sop = {.kind = BML_JD_STRUCT, .fields = mf_sop, .n_fields = 3};
+static const struct bml_json_desc md_sop = {.kind = BML_JD_STRUCT, .fields = mf_sop, .n_fields = 3}; /* struct_ops declaration (from bpf-mlir) */
 static const struct bml_json_field mf_decl[] = {{"name", &md_string}, {"kind", &md_string},     {"key", &md_string},
 						{"value", &md_string}, {"max_entries", &md_u64}, {"flags", &md_u64}, {"inner", &md_inner},
 						{"struct_ops", &md_sop}, {"map_extra", &md_u64}};
@@ -139,8 +140,8 @@ static int cmp_sop(const void *a, const void *b)
 	return strcmp(((const struct sop_kv *)a)->k, ((const struct sop_kv *)b)->k);
 }
 
-
-
+/* struct_ops (from bpf-mlir; null means none): store the declaration's spelling in x->struct_ops. The spelling is
+ * Go's StructOpsDecl.spelling: `type=<T>;`, then the name, then the ops members in order; the last duplicate wins. */
 static int decode_struct_ops(const struct bml_json *so, struct bml_map_decl *x, char **err)
 {
 	if (!so || so->type == BML_JSON_NULL)
@@ -166,7 +167,7 @@ static int decode_struct_ops(const struct bml_json *so, struct bml_map_decl *x, 
 		const struct bml_json *o = oa->items[i];
 		char *mem = NULL, *prog = NULL;
 		if (o->type == BML_JSON_NULL)
-			continue;
+			continue; /* a null element is Go's zero value (member "" and program "") */
 		if (o->type != BML_JSON_OBJECT) {
 			*err = md_xstrdup("json: cannot unmarshal into an element of ops of type StructOpsOpDecl");
 			goto out;
@@ -210,7 +211,7 @@ out:
 	return rc;
 }
 
-
+/* Decode one map declaration (an object) into x. Failure is -1; if *err is NULL the cause is out of memory. */
 static int decode_decl(const struct bml_json *m, struct bml_map_decl *x, char **err)
 {
 	if (m->type != BML_JSON_OBJECT) {
@@ -224,7 +225,7 @@ static int decode_decl(const struct bml_json *m, struct bml_map_decl *x, char **
 	    juint(m, "flags", 64, &x->has_flags, &x->flags, err))
 		return -1;
 	if (md_json_is_arena(m) && juint(m, "map_extra", 64, &x->has_map_extra, &x->map_extra, err)) return -1;
-
+	/* the inner-map template (null means none) */
 	const struct bml_json *in = bml_json_get(m, "inner");
 	if (in && in->type != BML_JSON_NULL) {
 		if (in->type != BML_JSON_OBJECT) {
@@ -241,7 +242,7 @@ static int decode_decl(const struct bml_json *m, struct bml_map_decl *x, char **
 	return decode_struct_ops(bml_json_get(m, "struct_ops"), x, err);
 }
 
-
+/* Add records (map[string]RecordShape) to d (NULL or null does nothing). Failure is -1; if *err is NULL the cause is out of memory. */
 static int decode_records(const struct bml_json *rs, struct bml_map_decls *d, char **err)
 {
 	if (rs && rs->type != BML_JSON_NULL) {
@@ -310,7 +311,7 @@ static int decode_records(const struct bml_json *rs, struct bml_map_decls *d, ch
 	return 0;
 }
 
-
+/* globals ([]GlobalDecl). A missing key or null is nil (not checked); `[]` is an empty list with has_globals set. Failure is -1; if *err is NULL the cause is out of memory. */
 static int decode_globals(const struct bml_json *gs, struct bml_map_decls *d, char **err)
 {
 	if (!gs || gs->type == BML_JSON_NULL)
@@ -326,7 +327,7 @@ static int decode_globals(const struct bml_json *gs, struct bml_map_decls *d, ch
 	for (size_t i = 0; i < gs->n; i++) {
 		const struct bml_json *g = gs->items[i];
 		struct bml_global_decl *x = &d->globals[d->n_globals++];
-		if (g->type == BML_JSON_NULL) {
+		if (g->type == BML_JSON_NULL) { /* Go's zero GlobalDecl */
 			if (!(x->name = md_xstrdup("")) || !(x->section = md_xstrdup("")) || !(x->type = md_xstrdup("")))
 				return -1;
 			continue;
@@ -436,7 +437,8 @@ out:
 	return rc;
 }
 
-
+/* One declaration (Go's DecodeStrictJSON(&MapDecl)); this is the per-map operation declaration that the mojo and
+ * spinel front ends supply through the C ABI. null is an empty declaration (Go's zero value). */
 int md_map_decl_parse_one(const char *data, size_t len, struct bml_map_decl *x, char **err, int arena)
 {
 	memset(x, 0, sizeof(*x));
@@ -464,7 +466,8 @@ int md_map_decl_parse_one(const char *data, size_t len, struct bml_map_decl *x, 
 	return rc;
 }
 
-
+/* A records document (Go's DecodeStrictJSON(&map[string]RecordDecl)). *is_null is set when the document is null
+ * (Go's nil map); the caller turns that into an error. */
 int bml_record_decls_parse(const char *data, size_t len, struct bml_map_decls *out, int *is_null, char **err)
 {
 	memset(out, 0, sizeof(*out));
@@ -489,7 +492,7 @@ int bml_record_decls_parse(const char *data, size_t len, struct bml_map_decls *o
 	return rc;
 }
 
-
+/* Go's MapDecls type, for the build-time ParseMapDecls (bindrt.ParseMapDecls) */
 const struct bml_json_desc *bml_map_decls_desc(void)
 {
 	return &md_top;

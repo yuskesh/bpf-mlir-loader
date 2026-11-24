@@ -1,3 +1,6 @@
+/* caps/live_btf.c — the live queries that read the vmlinux BTF. This is a C port of kload's CheckFunc, CheckFuncSig,
+ * CheckStructField and CheckFuncParam (describeParam), and of CheckKFields and CheckTracepoint in kernel/core. Mismatch
+ * sentences follow Go's fmt formats byte for byte. */
 #include "caps/live_internal.h"
 
 #include <stdio.h>
@@ -22,7 +25,7 @@ void bml_live_free(struct bml_live *l)
 	memset(l, 0, sizeof *l);
 }
 
-
+/* kload's vmlinux() (a sync.Once): returns NULL and an error sentence if the BTF cannot be read */
 int lv_vmlinux(struct bml_live *l, const struct bml_kbtf **kb)
 {
 	if (!l->kb_done) {
@@ -51,7 +54,7 @@ int lv_msg(char **msg, int rc, const char *prefix, const char *err)
 	return rc;
 }
 
-
+/* Append one mismatch sentence and empty b. Returns -1 on out of memory. */
 int lv_push(struct bml_strs *out, struct bml_buf *b)
 {
 	char *s = bml_buf_take(b);
@@ -72,14 +75,15 @@ int lv_oom(struct bml_strs *out, char **msg)
 	return BML_Q_ERROR;
 }
 
-
+/* The spelling of an integer type (i32, u64, ...). Go's it.Size*8 is uint32 arithmetic. */
 void lv_int_spell(const struct bml_kbtf *kb, const struct kbtf_type *t, char *dst, size_t n)
 {
 	int sgn = (bml_kbtf_u32(kb, t->aux) >> 24 & 0xf) & 1;
 	snprintf(dst, n, "%c%u", sgn ? 'i' : 'u', (uint32_t)(t->size_type * 8u));
 }
 
-
+/* Tell an out-of-memory error from by_name (rc 2, "out of memory") apart from the other results: only ErrNotFound (1) and
+ * "several matches" (2) are answers that Go gives. */
 int lv_lookup(const struct bml_kbtf *kb, const char *name, uint32_t kind, uint32_t *id, char **err)
 {
 	*err = NULL;
@@ -166,7 +170,7 @@ int bml_live_func_sig(struct bml_live *l, const char *name, int64_t nargs, const
 	return BML_Q_OK;
 }
 
-
+/* core's isIntSpelling (i8, u8, i16, u16, i32, u32, i64, u64; integer arguments were added in bpf-mlir v0.17.0) */
 static int is_int_spelling(const char *s)
 {
 	static const char *const ok[] = {"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"};
@@ -212,7 +216,7 @@ int bml_live_tracepoint(struct bml_live *l, const char *name, const struct bml_s
 		bml_buf_addf(&b, "tracepoint %s: btf_trace_%s does not point to a function prototype", name, name);
 		return lv_push(out, &b) ? lv_oom(out, msg) : BML_Q_OK;
 	}
-
+	/* The first argument is the tracepoint's data (void *). The arguments the program can see come after it. */
 	if (fp.vlen == 0) {
 		bml_buf_addf(&b, "tracepoint %s: the prototype has no parameters", name);
 		return lv_push(out, &b) ? lv_oom(out, msg) : BML_Q_OK;
@@ -225,13 +229,13 @@ int bml_live_tracepoint(struct bml_live *l, const char *name, const struct bml_s
 		const char *pn;
 		uint32_t pt;
 		int cyc;
-		if (!strcmp(args[i].p, "-"))
+		if (!strcmp(args[i].p, "-")) /* an argument that is not read (since bpf-mlir v0.17.0; it was counted above) */
 			continue;
 		bml_kbtf_param(kb, &fp, (uint32_t)i + 1, &pn, &pt);
 		struct kbtf_type p;
 		uint32_t pu = bml_kbtf_underlying(kb, pt, &cyc);
 		bml_kbtf_type(kb, pu, &p);
-		if (is_int_spelling(args[i].p)) {
+		if (is_int_spelling(args[i].p)) { /* an integer argument (since bpf-mlir v0.17.0) */
 			if (cyc || p.kind != KBTF_INT) {
 				bml_buf_addf(&b, "tracepoint %s: argument %zu is ", name, i);
 				bml_kbtf_format(kb, &b, pt, 0, 's');
@@ -268,7 +272,7 @@ static int cmp_str(const void *a, const void *b)
 	return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-
+/* findMember and the member path are in live_kpath.c */
 
 int bml_live_kfields(struct bml_live *l, const struct bml_kfield *kf, size_t n, struct bml_strs *out, char **msg)
 {
@@ -297,7 +301,7 @@ int bml_live_kfields(struct bml_live *l, const struct bml_kfield *kf, size_t n, 
 		}
 		struct kbtf_member mb = {0};
 		int twice = 0;
-		int found = lv_find_member_path(kb, id, k->field.p, &mb, &twice);
+		int found = lv_find_member_path(kb, id, k->field.p, &mb, &twice); /* since bpf-mlir v0.17.0 the search also looks inside anonymous members (breadth first), and it handles each step of a member path */
 		if (found == -1) {
 			bml_buf_free(&b);
 			return lv_oom(out, msg);
@@ -308,14 +312,15 @@ int bml_live_kfields(struct bml_live *l, const struct bml_kfield *kf, size_t n, 
 			bml_kbtf_type(kb, bml_kbtf_underlying(kb, mb.type, &cyc), &ft);
 		if (!found)
 			bml_buf_addf(&b, "the target struct %s has no field %s%s", k->strct.p, k->field.p,
-				     twice ? " (the member search met the same anonymous type twice — nested in a cycle or shared)" : "");
-		else if (!strncmp(k->type.p, "struct:", 7)) {
+				     twice ? " (the member search met the same anonymous type twice — nested in a cycle or shared)" : ""); /* since bpf-mlir v0.19.0 */
+		else if (!strncmp(k->type.p, "struct:", 7)) { /* the prefix row of an embedded struct */
 			if (!lv_kfield_embedded(kb, &mb, k->type.p + 7, &b)) {
 				bml_buf_free(&b);
 				continue;
 			}
 		} else if (!strncmp(k->type.p, "ptr:", 4) || !strcmp(k->type.p, "strptr")) {
-
+			/* ptr:<T> (since bpf-mlir v0.17.0) is a pointer to struct T; bitfields are not examined. strptr is a pointer whose stripped target
+			 * is a 1-byte integer. */
 			int sp = k->type.p[0] == 's';
 			if (cyc || ft.kind != KBTF_PTR) {
 				bml_buf_adds(&b, "the target field is ");
@@ -339,7 +344,7 @@ int bml_live_kfields(struct bml_live *l, const struct bml_kfield *kf, size_t n, 
 					continue;
 				}
 			}
-		} else if (k->type.p[0] == '[') {
+		} else if (k->type.p[0] == '[') { /* [N]i8 / [N]u8 (since bpf-mlir v0.17.0); the sign of the elements is not examined */
 			int64_t want = 0;
 			const char *rb = strchr(k->type.p, ']');
 			bml_go_atoi(k->type.p + 1, rb ? (size_t)(rb - k->type.p - 1) : 0, &want);

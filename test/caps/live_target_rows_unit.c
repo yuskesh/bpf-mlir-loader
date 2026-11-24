@@ -1,3 +1,5 @@
+/* The rules for the answers of the three live probes (no syscall is made): every row of the decision tables in the Go
+ * reference's kload netkit.go, sleepable.go and helper_target.go. */
 #include "caps/live.h"
 
 #include <errno.h>

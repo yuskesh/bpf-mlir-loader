@@ -1,4 +1,18 @@
+# scripts/stamp-lib.sh — the version facts of a bml tree: source form, source commit, dirty flag and the pinned bpf-mlir
+# commit, which the build stamps into libbml.a. Sourced, not run.
+#
+#   bml_stamp_facts <tree>                       # prints form=, source_commit=, dirty=, bpf_mlir_commit= (4 lines)
+#   bml_stamp_guarded <tree> <out-dir> <cmd...>  # facts → <out-dir>/bml_stamp.h → cmd → facts again; stops if they changed
+#
+# Forms (the source commit and the pinned bpf-mlir commit come from SOURCE_VERSION and PINS in a public tree):
+#   public — <tree>/SOURCE_VERSION exists: source commit from it, the bpf-mlir commit from <tree>/PINS (both exact formats),
+#            dirty from git status if <tree> owns its git repository, else -1. Never falls back to git for the commits.
+#   dev    — <tree> is the top level of its own git repository: HEAD, git status, the third_party/bpf-mlir gitlink in HEAD.
+#   none   — otherwise: "unknown", -1, "unknown" (the only values exempt from the 40-hex check).
+# A failed git or file read is a named stop ("stamp-facts: ..."), never a value.
+# BML_STAMP_MUT=<name> selects a test mutant (scripts/stamp-controls.sh only; build-libs.sh refuses it).
 
+# A newline and a tab for the exact-format patterns (printf, not $'...', which the public export's shell stripper refuses)
 BML_STAMP_NL=$(printf '\n.')
 BML_STAMP_NL=${BML_STAMP_NL%.}
 BML_STAMP_TAB=$(printf '\t')
@@ -8,6 +22,7 @@ bml_stamp_fail() {
   return 1
 }
 
+# bml_stamp_hex <value> — true if a full commit id (40 lowercase hex)
 bml_stamp_hex() {
   if [ "${BML_STAMP_MUT:-}" = lenient_hex ]; then
     [[ $1 =~ ^[0-9a-f]+$ ]]
@@ -16,6 +31,8 @@ bml_stamp_hex() {
   fi
 }
 
+# bml_stamp_read <file> — prints the file's bytes and a final "x" (so command substitution keeps trailing newlines).
+# A NUL byte is refused before any capture: bash command substitution would drop it silently.
 bml_stamp_read() {
   local all kept
   all=$(wc -c < "$1") || return 1
@@ -25,6 +42,9 @@ bml_stamp_read() {
   printf x
 }
 
+# bml_stamp_owned <tree> — status 0: <tree> is the top level of its own git repository; 1: no .git entry at <tree> (not
+# owned; git is not run — a git-less tree, also when unpacked inside another repository); 2: <tree> has a .git entry but git
+# cannot read it or names another top level (a stop, never "not owned")
 bml_stamp_owned() {
   local top real
   if [ "${BML_STAMP_MUT:-}" = no_owner_check ]; then
@@ -37,6 +57,7 @@ bml_stamp_owned() {
   [ "$top" = "$real" ] || return 2
 }
 
+# bml_stamp_owned_or_stop <tree> — prints "yes" or "no"; a broken repository is a named stop
 bml_stamp_owned_or_stop() {
   local rc=0
   bml_stamp_owned "$1" || rc=$?
@@ -47,6 +68,7 @@ bml_stamp_owned_or_stop() {
   esac
 }
 
+# bml_stamp_dirty <tree> — prints 1 or 0; a failed git status is a stop
 bml_stamp_dirty() {
   local st
   if [ "${BML_STAMP_MUT:-}" = plain_status ]; then
@@ -107,6 +129,7 @@ bml_stamp_facts() {
   printf 'form=%s\nsource_commit=%s\ndirty=%s\nbpf_mlir_commit=%s\n' "$form" "$source" "$dirty" "$bpf"
 }
 
+# bml_stamp_header <facts> — the C header for src/util/stamp.c (string and integer literals only)
 bml_stamp_header() {
   local form source dirty bpf line
   while IFS= read -r line; do
@@ -122,6 +145,8 @@ bml_stamp_header() {
   printf '#define BML_STAMP_DIRTY %s\n#define BML_STAMP_BPF_MLIR_COMMIT "%s"\n' "$dirty" "$bpf"
 }
 
+# The body runs in a subshell with errexit, outside any conditional context, so a failing command in it fails the guard.
+# Do not call bml_stamp_guarded itself from a conditional context (if, ||, &&): bash would then ignore errexit in the body.
 bml_stamp_guarded() {
   local t="$1" d="$2" f1 f2 rc=0 err had_e=0
   shift 2

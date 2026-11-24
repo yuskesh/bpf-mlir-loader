@@ -1,3 +1,7 @@
+/* abi/object.c — the checked load, the Unmet entries that did not stop it, close, and the version of the
+ * verdict rules. The order of the stages and the kinds follow the downstream Go loader (the mojo
+ * loader's internal/loader). The Go runtime stage (a check for a signal of -1) does not exist here.
+ * The messages are the bindrt type messages, byte for byte. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 #include "abi/rejected.h"
@@ -19,16 +23,16 @@ int64_t bml_policy_version(void)
 	return BML_POLICY_VERSION;
 }
 
-
+/* The format limit is a constant, not stamped; it is kept here so that it does not pull in util/stamp.o. */
 int64_t bml_max_format_version(void)
 {
 	return BML_MAX_FORMAT_VERSION;
 }
 
-
+/* How to fix a schema mismatch (the hint of bindrt.CheckSchema, which names no tool). */
 static const char schema_hint[] = "rebuild both ELF and bindings from the same schema";
 
-
+/* The verifier log inside libbpf's print output (from the last "-- BEGIN PROG LOAD LOG --" to "-- END PROG LOAD LOG --"). */
 static void verifier_log(const char *log, const char **s, size_t *n)
 {
 	*s = "";
@@ -44,7 +48,7 @@ static void verifier_log(const char *log, const char **s, size_t *n)
 	*n = e ? (size_t)(e - b) : strlen(b);
 }
 
-
+/* The message for a verifier rejection: "rejected at <f>:<l> — <error>\n<last 20 lines of the log>". The downstream tests check this form (the mojo VERIFIER_REJECTED). */
 static int64_t verifier_fail(const struct bml_load_result *lr)
 {
 	const char *vl;
@@ -79,9 +83,10 @@ static int64_t verifier_fail(const struct bml_load_result *lr)
 #endif
 
 #ifdef BML_TEST_CAPS
-
-
-
+/* Caps that exist only in the test build (-DBML_TEST_CAPS; they are not in the product libbml.a, which
+ * the gate checks with nm). They are the same as denyCaps and unknownHelperCaps in the downstream test
+ * archive: kind 1 answers that no program type, helper or map type exists (it has no other queries,
+ * so those are Unknown); kind 2 is the live caps except that the helper probe alone is Unknown. */
 static int deny_type(void *ctx, const char *name, int64_t id, int *out, char **msg)
 {
 	(void)ctx, (void)name, (void)id, (void)msg;
@@ -102,14 +107,17 @@ static int unknown_helper(void *ctx, const char *pt, int64_t pid, const char *h,
 }
 #endif
 
-
+/* The kind of caps (0 is live). An unknown kind gives -1. */
 static int caps_of(int64_t kind, struct bml_live_caps *lc, struct bml_caps *out)
 {
 	memset(out, 0, sizeof *out);
-	
-
-
-
+	/* The loader declaration used by the C ABI check is cilium-v0.22-usdt-ksyscall. It differs from
+	 * cilium-v0.22 in the name, in usdt_attach ref_ctr and in ksyscall_attach prefix: bml_attach_usdt
+	 * takes on the loader's ref_ctr obligation, and bml_attach_ksyscall takes on its prefix obligation.
+	 * Earlier there was no declaration (the default cilium-v0.22 stopped a USDT ELF with usdt_loader;
+	 * mutation abi.decl_cilium022), and before ksyscall the declaration was cilium-v0.22-usdt. Two
+	 * mutations drop one half of the declaration: abi.decl_no_ksyscall (the earlier cilium-v0.22-usdt)
+	 * and abi.decl_no_usdt (cilium-v0.22-ksyscall). */
 	lc->decl = &bml_loader_cilium022usdtksyscall;
 	if (BML_MUT("abi.decl_cilium022"))
 		lc->decl = NULL;
@@ -137,7 +145,7 @@ static int caps_of(int64_t kind, struct bml_live_caps *lc, struct bml_caps *out)
 	return -1;
 }
 
-
+/* Whether the maps of the map-declaration document exist in the loaded object (stage 5 downstream). */
 static const char *missing_map(struct bpf_object *obj, const struct bml_map_decls *d)
 {
 	for (size_t i = 0; i < d->n_maps; i++)
@@ -146,8 +154,10 @@ static const char *missing_map(struct bpf_object *obj, const struct bml_map_decl
 	return NULL;
 }
 
-
-
+/* A privilege hint for an EPERM from the check or the load (a byte-for-byte copy of permHint in the
+ * downstream mojo loader's tracing.go): tracing and kprobe programs need CAP_PERFMON, xdp and
+ * sched_cls need CAP_NET_ADMIN, and CAP_BPF is always needed; the names are joined by " + " in this
+ * order. For anything other than EPERM the hint is "". */
 static const char *perm_hint(const struct bml_requirements *req, const char *text, char *buf, size_t cap)
 {
 	buf[0] = 0;
@@ -177,7 +187,7 @@ static void object_free(struct abi_object *o)
 	free(o);
 }
 
-
+/* The body of load. check 0 skips stage 3 (the check of the target requirements); only bml_testonly_load_unchecked_targets of the test build does that. */
 static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t sha_len, const char *maps, int64_t maps_len, const char *config,
 			 int64_t config_len, const char *targets, int64_t targets_len, int64_t caps_kind, int check)
 {
@@ -200,14 +210,14 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 	int64_t res = -1;
 	struct bml_map_decls d = {0};
 	char *err = NULL;
-	struct bml_rodata_value *vals = NULL;
+	struct bml_rodata_value *vals = NULL; /* the configured values of .rodata (load arguments) */
 	size_t n_vals = 0;
-
+	/* stage 0': the map-declaration document */
 	if (bml_arena_map_decls_parse(maps ? maps : "", (size_t)maps_len, &d, &err) != 0 || !d.has_maps) {
 		res = abi_fail(BML_PRECHECK_FAILED, "bml: the map declarations are unreadable: %s", err ? err : "no \"maps\" array");
 		goto out;
 	}
-
+	/* stage 1: requirements (bindrt.Parse; *RequirementsError) */
 	struct bml_req_elf_error ee;
 	if (bml_req_from_elf(elf, (size_t)n, &o->req, &ee) != 0) {
 		const char *m = ee.stage == BML_REQ_ELF_PARSE ? ee.parse.msg : ee.msg;
@@ -215,7 +225,7 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 		bml_req_elf_error_free(&ee);
 		goto out;
 	}
-
+	/* stage 2: schema (SchemaMismatchError; %q is Go's strconv.Quote) */
 	const char *es = o->req->schema_sha256.p ? o->req->schema_sha256.p : "";
 	if (strlen(es) != (size_t)sha_len || memcmp(es, sha ? sha : "", (size_t)sha_len) != 0) {
 		struct bml_buf b = {0};
@@ -236,7 +246,7 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 	}
 	memcpy(o->elf, elf, (size_t)n);
 	o->elf_len = (size_t)n;
-
+	/* stage 2': the map declaration (MapDeclError) */
 	struct bml_map_problems mp = {0};
 	int mrc = bml_check_map_decls(o->req, o->elf, o->elf_len, &d, &mp);
 	if (!mrc)
@@ -256,18 +266,18 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 		res = abi_put(&r);
 		goto out;
 	}
-
+	/* stage 2''': the configured values (the config document is checked against the declared globals; a missing one is CONFIG_NOT_SET, before any kernel object exists) */
 	if ((res = abi_config(config, config_len, &d, o->elf, o->elf_len, &vals, &n_vals)) != 0)
 		goto out;
-
+	/* stage 2'''': the uprobe targets (a load argument; each path is opened once and shared by the caps used for the check and by the attach) */
 	if ((res = abi_uprobe_targets(o, targets, targets_len)) != 0)
 		goto out;
 	res = -1;
-
+	/* stage 3: the check (Precheck; PrecheckError / TargetError) */
 	struct bml_caps caps;
 	caps_of(caps_kind, &o->caps, &caps);
-	
-
+	/* Only objects with an arena use our checked pre-mmap contract.
+	 * Preserve every other declaration and the lifetime of its borrowed strings. */
 	for (size_t i = 0; i < o->req->n_maps; i++) {
 		if (strcmp(o->req->maps[i].map_type.p, "arena") || !o->caps.decl)
 			continue;
@@ -310,8 +320,8 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 		res = abi_put(&r);
 		goto out;
 	}
-	o->rest = all;
-
+	o->rest = all; /* the Unmet entries that did not stop the load */
+	/* stage 4: the load behind the guard */
 	struct bml_load_result lr;
 	if (bml_load_guarded_values(o->elf, o->elf_len, o->req, &caps, vals, n_vals, &o->lo, &lr) != 0) {
 		if (lr.stage == BML_LOAD_LIBBPF && lr.verifier)
@@ -328,7 +338,7 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 		goto out;
 	}
 	bml_load_result_free(&lr);
-
+	/* stage 5: whether the declared maps exist in the object */
 	const char *mm = missing_map(bml_obj_bpf(o->lo), &d);
 	if (mm) {
 		res = abi_fail(BML_PRECHECK_FAILED, "bml: the embedded ELF has no map %s", mm);
@@ -367,7 +377,7 @@ out:
 int64_t bml_object_unmet(int64_t obj)
 {
 	int64_t err;
-	struct abi_object *o = abi_object_acquire(obj, &err);
+	struct abi_object *o = abi_object_acquire(obj, &err); /* counted as a running call of the object */
 	if (!o)
 		return err;
 	struct abi_result r = {.kind = BML_OK};
@@ -381,7 +391,7 @@ int64_t bml_object_unmet(int64_t obj)
 
 int64_t bml_close(int64_t obj)
 {
-
+	/* Idempotent by design, so that a second close on a cleanup path is not an error. A closed object stays in the table, and every other operation on it is STATE. */
 	/* CONTRACT: if calls are running (the abi_object_acquire count), returns STATE without closing (does not wait;
  * the caller retries). Reading the count and setting the closed mark happen under one lock: calls after the mark get STATE from acquire, and calls counted before the mark are
  * seen by close through the count (there is no check-then-close window) */
@@ -403,7 +413,7 @@ int64_t bml_close(int64_t obj)
 		return abi_fail(BML_STATE, "bml: the object %lld has %d calls in flight on other threads — close it again after they return", (long long)obj,
 				busy);
 	abi_close_owned(obj);
-	if (first) {
+	if (first) { /* release the resources (the struct stays in the table) */
 		bml_obj_close(o->lo);
 		o->lo = NULL;
 		bml_requirements_free(o->req);
@@ -436,8 +446,10 @@ int64_t bml_load_checked_targets(const uint8_t *elf, int64_t n, const char *sha,
 }
 
 #ifdef BML_TEST_CAPS
-
-
+/* Test build only (the counterpart of the downstream testonly_load_unchecked and its _targets variant):
+ * a load that skips the stage-3 check. It still does the schema, the map declaration, the configured
+ * values, the reading of the targets and the load behind the guard; the caps are live. The name starts
+ * with bml_testonly_ (the gate checks with nm that the product has no such symbol). */
 int64_t bml_testonly_load_unchecked_targets(const uint8_t *elf, int64_t n, const char *sha, int64_t sha_len, const char *maps, int64_t maps_len,
 					    const char *config, int64_t config_len, const char *targets, int64_t targets_len)
 {

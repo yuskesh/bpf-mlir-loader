@@ -1,3 +1,4 @@
+/* The kernel config snapshot of kload/ksymvar.go: only the first file that can be opened is read, and the first value wins. */
 #define _GNU_SOURCE
 #include "caps/value_sources.h"
 #include "caps/live_internal.h"

@@ -1,3 +1,5 @@
+/* req/check_util.c — parts of the checker: adding an Unmet, whether a query exists, the loader declaration, the targets of MapFields and the NUL
+ * check; split out of check.c. */
 #include "req/check_internal.h"
 
 #include <stdarg.h>
@@ -34,7 +36,7 @@ char *ck_fmtd(const char *f, ...)
 	return p;
 }
 
-
+/* Add an Unmet. Ownership of detail moves to it (NULL means ""). */
 void ck_add(struct ck *c, const char *kind, const char *program, const char *name, int64_t id, char *detail)
 {
 	struct bml_unmets *v = c->out;
@@ -80,7 +82,7 @@ const struct bml_loader_decl *ck_loader_of(const struct ck *c)
 	return &bml_loader_cilium022;
 }
 
-
+/* Stop with a checking error (ownership of msg moves to *err). */
 int ck_fail(struct ck *c, char *msg)
 {
 	*c->err = msg ? msg : ck_dupn("check failed");
@@ -104,9 +106,9 @@ const char *ck_tracing_attach(const struct bml_requirements *r, const char *prog
 			const char *t = a->attach_type.p;
 			if (!strcmp(t, "trace_fentry") || !strcmp(t, "trace_fexit") || !strcmp(t, "trace_raw_tp"))
 				return t;
-			if (!strcmp(t, "trace_iter"))
+			if (!strcmp(t, "trace_iter")) /* judgement version 12: the generic row trace_iter iter:<target> */
 				return "trace_iter";
-			if (!strcmp(t, "trace_fmod_ret") || !strcmp(t, "modify_return"))
+			if (!strcmp(t, "trace_fmod_ret") || !strcmp(t, "modify_return")) /* family rows and generic rows; the key is the UAPI name */
 				return "modify_return";
 		}
 	}
@@ -116,7 +118,7 @@ int ck_may_hold_field(const struct bml_map *m)
 {
 	if (strncmp(m->value.p ? m->value.p : "", "record:", 7) != 0)
 		return 0;
-
+	/* judgement version 11: user_ringbuf has no fields either */
 	return strcmp(m->map_type.p, "ringbuf") != 0 && strcmp(m->map_type.p, "perf_event_array") != 0 && strcmp(m->map_type.p, "user_ringbuf") != 0;
 }
 
@@ -186,7 +188,7 @@ int ck_has_nul(const struct bml_requirements *r)
 		for (size_t j = 0; j < a->n_uprobe_args; j++)
 			if (N(a->uprobe_args[j].type))
 				return 1;
-
+		/* the target kind and value of the generic row (format 9), and the companion rows of format 11 */
 		if (N(a->tkind) || N(a->tval) || N(a->ext_ret) || N(a->sop_struct) || N(a->sop_member))
 			return 1;
 		for (size_t j = 0; j < a->n_tpfields; j++)
@@ -195,7 +197,7 @@ int ck_has_nul(const struct bml_requirements *r)
 		for (size_t j = 0; j < a->n_ext_args; j++)
 			if (N(a->ext_args[j]))
 				return 1;
-
+		/* the mtarget, usdtsem and usdtarg rows of format 12 */
 		if (N(a->usdt_sem) || N(a->tpbuf_type))
 			return 1;
 		for (size_t j = 0; j < a->n_mtargets; j++)
@@ -204,14 +206,14 @@ int ck_has_nul(const struct bml_requirements *r)
 		for (size_t j = 0; j < a->n_usdt_args; j++)
 			if (N(a->usdt_args[j].type))
 				return 1;
-		for (size_t j = 0; j < a->n_sys_args; j++)
+		for (size_t j = 0; j < a->n_sys_args; j++) /* the sysarg and mtargetarg rows of format 13 */
 			if (N(a->sys_args[j].type))
 				return 1;
 		for (size_t j = 0; j < a->n_mtarget_args; j++)
 			if (N(a->mtarget_args[j].type))
 				return 1;
 	}
-	for (size_t i = 0; i < r->n_kfuncs; i++) {
+	for (size_t i = 0; i < r->n_kfuncs; i++) { /* the kfunc rows */
 		const struct bml_kfunc *k = &r->kfuncs[i];
 		if (N(k->program) || N(k->name) || N(k->ret))
 			return 1;
@@ -219,12 +221,12 @@ int ck_has_nul(const struct bml_requirements *r)
 			if (N(k->args[j]))
 				return 1;
 	}
-	for (size_t i = 0; i < r->n_innermaps; i++) {
+	for (size_t i = 0; i < r->n_innermaps; i++) { /* the innermap rows */
 		const struct bml_innermap *im = &r->innermaps[i];
 		if (N(im->outer) || N(im->map_type) || N(im->key) || N(im->value))
 			return 1;
 	}
-	for (size_t i = 0; i < r->n_ctxaccesses; i++) {
+	for (size_t i = 0; i < r->n_ctxaccesses; i++) { /* the ctxaccess rows */
 		const struct bml_ctxaccess *x = &r->ctxaccesses[i];
 		if (N(x->program) || N(x->attach_type) || N(x->strct) || N(x->field) || N(x->mode))
 			return 1;

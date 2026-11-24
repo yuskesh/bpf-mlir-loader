@@ -1,3 +1,8 @@
+/* abi/percpu.c — get, put, delete and iterate on per-CPU maps (percpu_array, percpu_hash and
+ * lru_percpu_hash), the number of possible CPUs, and a test run pinned to one CPU. The semantics
+ * follow the downstream mojo loader's percpu.go. A value is the possible CPUs times the value size,
+ * packed (the kernel uses an 8-byte stride per CPU, and the library packs it), and put replaces
+ * the slots of all CPUs. */
 #define _GNU_SOURCE
 #include "abi/map_internal.h"
 
@@ -22,7 +27,7 @@ static size_t stride(size_t n)
 
 int64_t bml_possible_cpus(void)
 {
-	int n = libbpf_num_possible_cpus();
+	int n = libbpf_num_possible_cpus(); /* /sys/devices/system/cpu/possible (the same file as cilium's PossibleCPU) */
 	if (n <= 0)
 		return abi_fail(BML_OTHER, "bml: possible CPUs: %s", abi_errno(-n));
 	return abi_ok(n);
@@ -146,7 +151,7 @@ int64_t bml_percpu_iter_open(int64_t obj, const char *decl, int64_t dl, const ch
 	int64_t e = open_percpu(obj, decl, dl, km, kl, vm, vl, klen, vlen, &m, &n);
 	if (e)
 		return e;
-	e = abi_iter_open(&m, obj, klen, vlen * n, n);
+	e = abi_iter_open(&m, obj, klen, vlen * n, n); /* next is shared with bml_hash_iter_next; the value is possible CPUs times vlen */
 	abi_map_close(&m);
 	return e;
 }
@@ -164,7 +169,7 @@ int64_t bml_test_run_xdp_data_on_cpu(int64_t obj, const char *prog, int64_t prog
 		return abi_fail(BML_OTHER, "bml: possible CPUs: %s", abi_errno(-np));
 	if (cpu < 0 || cpu >= np)
 		return abi_fail(BML_OTHER, "bml: test run on CPU %lld: the machine has %d possible CPUs", (long long)cpu, np);
-
+	/* Change the calling thread's affinity, check getcpu before and after, and restore it (if it cannot be restored the result is OTHER, so no process state is left behind). */
 	cpu_set_t old, one, now;
 	if (sched_getaffinity(0, sizeof old, &old) != 0)
 		return abi_fail(BML_OTHER, "bml: sched_getaffinity: %s", abi_errno(errno));

@@ -1,3 +1,4 @@
+/* btf/globals.c — a copy of GlobalSymbols, GlobalProblems, checkGlobal and btfRelocs of go/layout (the maps.json globals check; see the comment in btf/globals.h) */
 #include "btf/globals.h"
 
 #include <stdlib.h>
@@ -17,7 +18,7 @@ static char *dupe(const char *s)
 	return strdup(s);
 }
 
-
+/* wraps an error from Go's f.Symbols() ("the ELF symbol table cannot be read: %w") */
 static int read_symbols(const struct bml_elf *e, struct bml_elf_sym **syms, size_t *n, char **err)
 {
 	char *serr = NULL;
@@ -67,7 +68,7 @@ int btf_global_symbols(const void *data, size_t len, struct btf_gsym **out, size
 		size_t j = 0;
 		while (j < k && strcmp(g[j].name, s->name))
 			j++;
-		g[j].name = s->name;
+		g[j].name = s->name; /* Go's out[sy.Name] = n: the last one wins */
 		g[j].section = sec;
 		if (j == k)
 			k++;
@@ -86,7 +87,7 @@ struct brel {
 	uint32_t off, sym, rtype;
 };
 
-
+/* Go's btfRelocs: for the SHT_REL section that applies to .BTF, map each r_offset to its relocation (the last entry for the same r_offset wins). Failure is -1 with *err set. */
 static int btf_relocs(const struct bml_elf *e, struct brel **out, size_t *n, char **err)
 {
 	*out = NULL;
@@ -142,7 +143,7 @@ static int btf_relocs(const struct bml_elf *e, struct brel **out, size_t *n, cha
 	return 0;
 }
 
-
+/* String of Go's elf.SymBind (the stringName rule) */
 static void add_bind(struct bml_buf *b, unsigned v)
 {
 	static const struct {
@@ -163,7 +164,7 @@ static void add_bind(struct bml_buf *b, unsigned v)
 	bml_buf_addf(b, "%u", v);
 }
 
-
+/* add one problem (problems are joined with "; ") */
 #define PROB(...)                                                                                                                  \
 	do {                                                                                                                       \
 		if (o->len)                                                                                                        \
@@ -171,14 +172,14 @@ static void add_bind(struct bml_buf *b, unsigned v)
 		bml_buf_addf(o, __VA_ARGS__);                                                                                      \
 	} while (0)
 
-
+/* Go's checkGlobal */
 static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms, size_t ns, const struct lbtf *b, const struct brel *rels,
 			 size_t nr, const char *name, const char *section, uint32_t size, int is_signed, struct bml_buf *o)
 {
 	const struct bml_elf_sym *sym = NULL;
 	for (size_t i = 0; i < ns; i++) {
 		if (!strcmp(syms[i].name, name) && BML_ST_TYPE(syms[i].info) == BML_STT_OBJECT) {
-			if (sym) {
+			if (sym) { /* Go returns only this message (there are no problems yet) */
 				PROB("global %s: the ELF has two symbols of that name", name);
 				return;
 			}
@@ -199,7 +200,7 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 		PROB("global %s: the symbol is in section %s (declared %s)", name, sec ? sec->name : "?", section);
 	if (sym->size != (uint64_t)size)
 		PROB("global %s: the symbol size is %llu (declared %u)", name, (unsigned long long)sym->size, size);
-
+	/* the BTF DATASEC and VAR */
 	const struct ltype *ds = NULL;
 	for (size_t i = 0; i < b->n; i++) {
 		if (b->t[i].kind == 15 && !strcmp(b->t[i].name, section)) {
@@ -221,7 +222,7 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 	for (uint32_t i = 0; i < ds->n_secinfo; i++) {
 		uint32_t id = ds->secinfo[i].type_id;
 		if (id < b->n && b->t[id].kind == 14 && !strcmp(b->t[id].name, name))
-			vsi = &ds->secinfo[i];
+			vsi = &ds->secinfo[i]; /* Go does not break either: the last one wins */
 	}
 	if (!vsi) {
 		PROB("global %s: DATASEC %s has no VAR %s", name, section, name);
@@ -232,7 +233,7 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 	for (size_t i = 0; i < nr; i++)
 		if (rels[i].off == vsi->pos)
 			r = &rels[i];
-	if (r) {
+	if (r) { /* a relocatable .o: its DATASEC offsets are carried by relocations, so add the relocation symbol's value */
 		if (r->rtype != R_BPF_64_ABS32 && r->rtype != R_BPF_64_NODYLD32)
 			PROB("global %s: the DATASEC offset relocation has type %u (not R_BPF_64_ABS32 / R_BPF_64_NODYLD32)", name, r->rtype);
 		else if (r->sym == 0 || r->sym > ns || strcmp(syms[r->sym - 1].name, name))
@@ -248,7 +249,7 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 		PROB("global %s: the DATASEC size is %u (the ELF symbol has %llu)", name, vsi->size, (unsigned long long)sym->size);
 	if (sec && (uint64_t)vsi->offset + vsi->size > sec->size)
 		PROB("global %s: the DATASEC range [%u, %u) exceeds the ELF section size %llu", name, vsi->offset,
-		     (uint32_t)(vsi->offset + vsi->size), (unsigned long long)sec->size);
+		     (uint32_t)(vsi->offset + vsi->size), (unsigned long long)sec->size); /* Go's uint32 sum (it wraps around) */
 	const struct ltype *vt = btf_layout_resolve(b, b->t[vsi->type_id].type_id);
 	if (vt->kind != 1) {
 		PROB("global %s: the VAR type (kind %u) is not INT", name, vt->kind);
@@ -283,7 +284,7 @@ char *btf_global_problems(const void *data, size_t len, const char *name, const 
 		goto done;
 	struct bml_buf o = {0};
 	check_global(&e, syms, ns, &b, rels, nr, name, section, size, is_signed, &o);
-	res = bml_buf_take(&o);
+	res = bml_buf_take(&o); /* empty is ""; NULL means out of memory (*err is NULL) */
 done:
 	free(rels);
 	if (have_btf)

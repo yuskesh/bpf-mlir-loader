@@ -1,3 +1,7 @@
+/* abi/map.c — reading and writing array maps: a strict read of one declaration (DecodeStrictJSON); a
+ * check of the declaration on every operation (CheckMapDecls in one direction only, AllowUndeclared);
+ * get and put of bits (the mojo form); integers with a range (the spinel form, VALUE_RANGE); and the
+ * bytes of a record (checked against the records). */
 #define _GNU_SOURCE
 #include "abi/map_internal.h"
 #include "maps/arena.h"
@@ -20,7 +24,7 @@ static void record_free(struct bml_record_decl *r)
 	memset(r, 0, sizeof *r);
 }
 
-
+/* Checks the declaration (and the records document) against the ELF; the MapDeclError messages are the same as in bindrt. records may be NULL. */
 static int64_t check_decl(struct abi_object *o, struct bml_map_decl *d, struct bml_map_decls *records)
 {
 	struct bml_map_decls one = {.allow_undeclared = 1, .has_maps = 1, .maps = d, .n_maps = 1};
@@ -62,7 +66,7 @@ int64_t abi_map_open_kind(int64_t h, const char *decl, int64_t decl_len, const c
 	int64_t err;
 	if (decl_len < 0 || (!decl && decl_len))
 		return abi_fail(BML_OTHER, "bml: a negative length or a NULL string with a length");
-	m->o = abi_object_acquire(h, &err);
+	m->o = abi_object_acquire(h, &err); /* counted as a running call of the object; abi_map_close gives the count back */
 	if (!m->o)
 		return err;
 	char *e = NULL;
@@ -88,7 +92,7 @@ int64_t abi_map_open_kind(int64_t h, const char *decl, int64_t decl_len, const c
 			return rr;
 		}
 	}
-
+	/* The records documents (one for the key, one for the value; an empty one means none). A later record with the same name wins, like an assignment into a Go map. */
 	struct bml_map_decls recs = {0};
 	for (size_t i = 0; i < n_records; i++) {
 		if (!records[i] || records_len[i] <= 0)
@@ -106,7 +110,7 @@ int64_t abi_map_open_kind(int64_t h, const char *decl, int64_t decl_len, const c
 			size_t j = 0;
 			while (j < recs.n_records && strcmp(recs.records[j].name, one.records[k].name) != 0)
 				j++;
-			if (j < recs.n_records) {
+			if (j < recs.n_records) { /* the later one wins: release the old record and replace it */
 				record_free(&recs.records[j]);
 				recs.records[j] = one.records[k];
 			} else {
@@ -150,7 +154,7 @@ void abi_map_close(struct abi_map *m)
 	memset(m, 0, sizeof *m);
 }
 
-
+/* A u32 key (the downstream array entry point); a value out of range is OTHER. */
 static int64_t u32_key(struct abi_map *m, int64_t key, uint32_t *k)
 {
 	if (m->key_size != 4)
@@ -208,7 +212,7 @@ int64_t bml_map_put_bits(int64_t obj, const char *decl, int64_t decl_len, int64_
 	return e;
 }
 
-
+/* Signedness of the declared value type (i32 and i64 are signed). */
 static int is_signed(const struct bml_map_decl *d)
 {
 	return d->value && d->value[0] == 'i';

@@ -1,3 +1,5 @@
+/* req/unmet.c — the Unknown and BlocksLoad properties of an Unmet, its message (Go's Unmet.String, byte-identical with bindrt's) and releasing it;
+ * split out of check.c. */
 #include "req/check_internal.h"
 
 #include <stdarg.h>
@@ -9,7 +11,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* ---- Unmet ---- */
 
 int bml_unmet_unknown(const struct bml_unmet *u)
 {
@@ -24,15 +26,15 @@ int bml_unmet_blocks_load(const struct bml_unmet *u)
 		"arg_tag_unknown",     "retsig_unknown",        "arch_unknown",         "ctxfield_unknown",
 		"kprobearg_unknown",   "attach_symbol_unknown", "attach_alias_unknown", "binary_unknown",
 		"uprobearg_unknown",   "farg_unknown",          "uprobearg_abi_unknown",
-		"uretprobe_abi_unknown",
-		"tpfield_unknown",       "ext_target_unknown", "structop_unknown",
-		"usdtarg_unknown",       "usdt_loader_unknown",
+		"uretprobe_abi_unknown", /* judgement version 8 */
+		"tpfield_unknown",       "ext_target_unknown", "structop_unknown", /* judgement version 9 */
+		"usdtarg_unknown",       "usdt_loader_unknown", /* judgement version 11 */
 		"kfunc_sig_unknown",     "sysarg_unknown",     "lsm_cgroup_loader_unknown", "fsession_loader_unknown",
-		"ksyscall_loader_unknown",
+		"ksyscall_loader_unknown", /* judgement version 12 */
 		"enumval_unknown", "coreenum_unknown", "funcret_unknown", "kstructsize_unknown", "fibflags_unknown",
 		"datakptr_loader_unknown", "arena_loader_unknown", "typed_ksym_loader_unknown", "ksymvar_unknown",
 		"kconfig_loader_unknown", "kconfig_unknown",
-		"helper_target_unknown",
+		"helper_target_unknown", /* attach_netkit_unknown and sleepable_type_unknown do not block */
 	};
 	if (!bml_unmet_unknown(u))
 		return 1;
@@ -43,7 +45,8 @@ int bml_unmet_blocks_load(const struct bml_unmet *u)
 		return 1;
 	if (BML_MUT("check.unknown_not_blocking"))
 		return 0;
-
+	/* Judgement version 7: attach_type_unknown, attach_target_unknown and ctx_access_unknown do not block (they are not in the table below). The
+	 * mutation makes them block. */
 	if (BML_MUT("check.v9_unknown_blocks") &&
 	    (!strcmp(u->kind, "attach_type_unknown") || !strcmp(u->kind, "attach_target_unknown") || !strcmp(u->kind, "ctx_access_unknown")))
 		return 1;
@@ -84,7 +87,7 @@ char *bml_unmet_string(const struct bml_unmet *u)
 	else if (IS("program_type"))
 		bml_buf_addf(&b, "program %s needs program type %s (%lld), which the target does not have", P, N, I);
 	else if (IS("attach") || IS("arch") || IS("ctxfield") || IS("attach_alias") || IS("kprobearg") || IS("binary") ||
-		 IS("uprobe_symbol") || IS("uprobearg") || IS("uprobe_debug_build_id") || IS("uprobe_debug_crc"))
+		 IS("uprobe_symbol") || IS("uprobearg") || IS("uprobe_debug_build_id") || IS("uprobe_debug_crc")) /* judgement version 16 */
 		bml_buf_addf(&b, "program %s: %s", P, D);
 	else if (IS("kfield"))
 		bml_buf_adds(&b, D);
@@ -94,7 +97,7 @@ char *bml_unmet_string(const struct bml_unmet *u)
 		bml_buf_addf(&b, "program %s reads pointer argument %lld of tracepoint %s; the target's verifier does not mark NULL-able tracepoint arguments (%s), so it does not enforce a NULL check before a read — not loading", P, I, N, D);
 	else if (IS("arg_nullable_mark_unknown"))
 		bml_buf_addf(&b, "program %s reads pointer argument %lld of tracepoint %s; whether the target's verifier marks NULL-able tracepoint arguments cannot be determined (Unknown — %s). Not loading: the verifier might not enforce a NULL check before a read", P, I, N, D);
-	else if (IS("farg"))
+	else if (IS("farg")) /* since v0.17.0: the Detail carries a program prefix */
 		bml_buf_adds(&b, D);
 	else if (IS("farg_unknown"))
 		bml_buf_addf(&b, "program %s reads the pointer arguments of kernel function %s through fentry; this check cannot judge their types (Unknown — it needs the target BTF). Not loading: an argument of another type is read as the declared struct silently", P, N);
@@ -106,7 +109,7 @@ char *bml_unmet_string(const struct bml_unmet *u)
 		bml_buf_addf(&b, "program %s attaches with tcx (%s); whether the target has tcx cannot be determined (Unknown — %s; the loader decides at attach)", P, N, D);
 	else if (IS("attach_func_unknown"))
 		bml_buf_addf(&b, "program %s attaches (fentry) to kernel function %s; this check cannot judge whether it exists (Unknown — it needs the target BTF; the loader and the kernel decide at attach)", P, N);
-	else if (IS("attach_unknown") && D[0])
+	else if (IS("attach_unknown") && D[0]) /* the Detail of tpbuf */
 		bml_buf_addf(&b, "program %s: %s (Unknown — Not loading: the tracepoint signature cannot be judged)", P, D);
 	else if (IS("attach_unknown"))
 		bml_buf_addf(&b, "program %s attaches to %s; this check cannot judge the tracepoint signature (Unknown — it needs the target BTF). Not loading: an argument of another type may pass the verifier", P, N);
@@ -134,31 +137,31 @@ char *bml_unmet_string(const struct bml_unmet *u)
 		bml_buf_addf(&b, "program %s attaches (uprobe) to %s in a user binary; the binary was not given to this check (Unknown — %s). Not loading: its identity cannot be confirmed", P, N, D);
 	else if (IS("uprobearg_unknown"))
 		bml_buf_addf(&b, "program %s reads argument %s as a typed value; the binary's DWARF cannot confirm it (Unknown — %s). Not loading", P, N, D);
-	else if (IS("uprobearg_abi"))
+	else if (IS("uprobearg_abi")) /* judgement version 4 */
 		bml_buf_addf(&b, "program %s reads the arguments of %s with the SysV registers, which that function does not use: %s", P, N, D);
 	else if (IS("uprobearg_abi_unknown"))
 		bml_buf_addf(&b, "program %s reads the arguments of %s with the SysV registers; the binary's DWARF cannot confirm the calling convention (Unknown — %s). Not loading", P, N, D);
-	else if (IS("uretprobe_abi"))
+	else if (IS("uretprobe_abi")) /* judgement version 8 */
 		bml_buf_addf(&b, "program %s reads the return value of %s from the SysV return value register, which that function does not use alone: %s", P, N, D);
 	else if (IS("uretprobe_abi_unknown"))
 		bml_buf_addf(&b, "program %s reads the return value of %s from the SysV return value register; the binary's DWARF cannot confirm the calling convention (Unknown — %s). Not loading", P, N, D);
 	else if (IS("helper_unknown"))
 		bml_buf_addf(&b, "program %s needs helper %s (%lld); the target cannot be probed for it (Unknown — %s)", P, N, I, D);
-	else if (IS("attach_type") && (!strcmp(D, "sk_skb") || !strcmp(D, "sk_msg")))
+	else if (IS("attach_type") && (!strcmp(D, "sk_skb") || !strcmp(D, "sk_msg"))) /* only creating the sockmap link fails */
 		bml_buf_addf(&b,
 			     "program %s (program type %s) loads with expected attach type %s, but the target kernel cannot create a BPF link of that attach type on a "
 			     "sockmap (the attach this object needs)",
 			     P, D, N);
-	else if (IS("attach_type") && (!strcmp(N, "trace_kprobe_multi") || !strcmp(N, "trace_uprobe_multi")))
+	else if (IS("attach_type") && (!strcmp(N, "trace_kprobe_multi") || !strcmp(N, "trace_uprobe_multi"))) /* the multi link */
 		bml_buf_addf(&b,
 			     "program %s (program type %s) loads with expected attach type %s, but the target kernel cannot create a BPF link of that attach type "
 			     "(the attach this object needs)",
 			     P, D, N);
-	else if (IS("attach_type"))
+	else if (IS("attach_type")) /* judgement version 7 */
 		bml_buf_addf(&b, "program %s is loaded with expected attach type %s, which the target kernel does not accept for program type %s", P, N, D);
 	else if (IS("attach_type_unknown"))
 		bml_buf_addf(&b, "program %s is loaded with expected attach type %s; whether the target accepts it cannot be determined (Unknown — %s). Loading anyway: the kernel rejects an unknown attach type loudly at load", P, N, D);
-	else if (IS("attach_target") && !strncmp(N, "map:", 4))
+	else if (IS("attach_target") && !strncmp(N, "map:", 4)) /* a static map target; told apart by Name only, as in Go */
 		bml_buf_addf(&b, "program %s: %s", P, D);
 	else if (IS("attach_target"))
 		bml_buf_addf(&b, "program %s attaches (%s) to %s, which the target kernel does not have", P, D, N);
@@ -168,7 +171,7 @@ char *bml_unmet_string(const struct bml_unmet *u)
 		bml_buf_addf(&b, "program %s accesses ctx field %s, which the target's verifier does not allow for %s", P, N, D);
 	else if (IS("ctx_access_unknown"))
 		bml_buf_addf(&b, "program %s accesses ctx field %s; whether the target's verifier allows it cannot be determined (Unknown — %s). Loading anyway: the verifier rejects a disallowed access loudly", P, N, D);
-	else if (IS("tpfield"))
+	else if (IS("tpfield")) /* judgement version 9 */
 		bml_buf_addf(&b, "program %s reads tracepoint field %s: %s", P, N, D);
 	else if (IS("tpfield_unknown"))
 		bml_buf_addf(&b, "program %s reads tracepoint field %s at a fixed offset; the target's tracepoint format cannot confirm it (Unknown — %s). Not loading: a moved or resized field is read silently", P, N, D);
@@ -180,11 +183,11 @@ char *bml_unmet_string(const struct bml_unmet *u)
 		bml_buf_addf(&b, "program %s implements struct_ops member %s: %s", P, N, D);
 	else if (IS("structop_unknown"))
 		bml_buf_addf(&b, "program %s implements struct_ops member %s; the target BTF cannot confirm the member and its signature (Unknown — %s). Not loading: an argument of another type is read silently", P, N, D);
-	else if (IS("map_type") && !strcmp(D, "inner"))
+	else if (IS("map_type") && !strcmp(D, "inner")) /* the inner map of a map-in-map */
 		bml_buf_addf(&b, "map %s holds inner maps of map type %s (%lld), which the target does not have", P, N, I);
 	else if (IS("map_type"))
 		bml_buf_addf(&b, "map %s needs map type %s (%lld), which the target does not have", P, N, I);
-	else if (IS("usdt_probe"))
+	else if (IS("usdt_probe")) /* judgement version 11 */
 		bml_buf_addf(&b, "program %s attaches (usdt) to %s: %s", P, N, D);
 	else if (IS("usdtarg"))
 		bml_buf_addf(&b, "program %s reads USDT argument %s: %s", P, N, D);
@@ -192,11 +195,11 @@ char *bml_unmet_string(const struct bml_unmet *u)
 		bml_buf_addf(&b, "program %s reads USDT argument %s; the point's argument cannot be read by this check (Unknown — %s). Not loading: an argument of another size or place is read silently", P, N, D);
 	else if (IS("usdt_loader"))
 		bml_buf_addf(&b, "program %s attaches (usdt) to %s: %s — not loading", P, N, D);
-	else if (IS("kfunc_sig"))
+	else if (IS("kfunc_sig")) /* judgement version 12 */
 		bml_buf_addf(&b, "program %s calls kfunc %s: %s", P, N, D);
 	else if (IS("kfunc_sig_unknown"))
 		bml_buf_addf(&b, "program %s calls kfunc %s; its prototype cannot be confirmed (Unknown — %s). Not loading: an argument of another integer width or sign passes the verifier and is read silently", P, N, D);
-	else if (IS("kfunc_allowed"))
+	else if (IS("kfunc_allowed")) /* judgement version 13 */
 		bml_buf_addf(&b, "program %s calls kfunc %s, which the kernel rejects in its exact initial profile (%s). Not loading", P, N, D);
 	else if (IS("kfunc_allowed_unknown"))
 		bml_buf_addf(&b, "program %s calls kfunc %s; its use in the exact initial profile cannot be confirmed (Unknown — %s). Loading anyway: the kernel rejects a disallowed kfunc loudly at load", P, N, D);

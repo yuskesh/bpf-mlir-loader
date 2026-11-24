@@ -1,3 +1,7 @@
+/* abi/registry.c — the registry of results and handles. The number space of results is separate from
+ * that of objects, links, readers and iterators, as in the downstream Go loader. All tables are
+ * guarded by one mutex, so any thread may call. The tables are small (one object per process, and its
+ * links, readers and iterators), so lookup is a linear search. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -22,7 +26,7 @@ void abi_unlock(void)
 	pthread_mutex_unlock(&mu);
 }
 
-
+/* ---- results ---- */
 
 struct rslot {
 	int64_t id;
@@ -114,7 +118,7 @@ int abi_set_unmets(struct abi_result *r, const struct bml_unmet *u, size_t n)
 	return 0;
 }
 
-
+/* Looks up a result; the caller holds the lock. */
 static struct abi_result *result_get(int64_t id)
 {
 	for (size_t i = 0; i < n_results; i++)
@@ -141,7 +145,7 @@ int64_t bml_result_value(int64_t r)
 	return v;
 }
 
-
+/* The message for an unknown result. It is static, in the downstream "<prefix>: no result N" form, but the number is left out of the text because the storage is static. */
 static const char no_result[] = "bml: no such result (it was never returned or was already freed)";
 
 const char *bml_result_message(int64_t r, int64_t *len)
@@ -220,7 +224,7 @@ void bml_result_free(int64_t r)
 	pthread_mutex_unlock(&mu);
 }
 
-
+/* ---- handles (object, link, reader, iterator) ---- */
 
 struct hslot {
 	int64_t id, owner;
@@ -331,8 +335,9 @@ void abi_object_release(struct abi_object *o)
 	abi_unlock();
 }
 
-
-
+/* The errno text in the spelling of Go's syscall.Errno (glibc's strerror with the first letter lowercased,
+ * bml_go_errno_str), in a per-thread buffer. The downstream tests compare texts such as
+ * "operation not permitted". */
 const char *abi_errno(int e)
 {
 	static __thread char buf[256];

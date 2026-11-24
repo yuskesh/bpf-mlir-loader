@@ -1,3 +1,14 @@
+/* abi/usdt.c — the USDT attach: the `usdt_attach: ref_ctr` contract of the requirements format
+ * specification, and a port of the Go reference usdtattach package.
+ * A point `<provider>:<name>` comes from the attach row of the requirements; the binary is the target fd
+ * given at load time (the file whose hash the check took). The spec of point i is written to key i of
+ * the compiler's spec map `__ebpf_usdt_spec_<program>`, and the cookie is i; a point with a semaphore
+ * is attached with a ref_ctr_offset.
+ * - The product load loads a usdt program with expected_attach_type 0 (in load/load.c). This removes
+ *   libbpf's silent rewrite of SEC_USDT to UPROBE_MULTI, the same shape as cilium, so each point
+ *   gets its own perf uprobe.
+ * - The test entry (bml_testonly_usdt_mode) can keep libbpf's rewrite (multi: one uprobe_multi link),
+ *   or keep it and still attach point by point (multi_perf: to observe the kernel's refusal). */
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -61,7 +72,7 @@ const struct bml_attach *abi_usdt_row(const struct abi_object *o, const char *na
 	return NULL;
 }
 
-
+/* Per-point uprobes: after the attach, compare the offset and cookie in the perf link info with the computed values. */
 static int64_t attach_points(struct bpf_program *p, const char *name, int pid, const char *fdpath, const struct bml_usdt_attach_point *pts, size_t n,
 			     struct bpf_link **ls)
 {
@@ -83,7 +94,7 @@ static int64_t attach_points(struct bpf_program *p, const char *name, int pid, c
 	return 0;
 }
 
-
+/* One uprobe_multi link: after the attach, compare the count, offsets, cookies and ref_ctr_offsets in the link info with the computed values. */
 static int64_t attach_multi(struct bpf_program *p, const char *name, int pid, const char *fdpath, const struct bml_usdt_attach_point *pts, size_t n,
 			    struct bpf_link **l)
 {
@@ -146,7 +157,7 @@ static int64_t attach_usdt_body(int64_t obj, const char *prog, int64_t plen, int
 		return abi_fail(BML_STATE, "bml: usdt %s has no target (it was not given to load — a checked load would have stopped)", name);
 	if (pid < 0 || pid > INT32_MAX)
 		return abi_fail(BML_OTHER, "bml: attach usdt %s: pid %lld is out of range (0 is every process)", name, (long long)pid);
-
+	/* The point `<provider>:<name>` (the check has verified that both parts are C identifiers). */
 	char pn[256];
 	snprintf(pn, sizeof pn, "%.*s", (int)a->target.len, a->target.p);
 	char *colon = strchr(pn, ':');
@@ -167,7 +178,7 @@ static int64_t attach_usdt_body(int64_t obj, const char *prog, int64_t plen, int
 		free(why);
 		return e;
 	}
-
+	/* The spec map (a program without ebpf.usdt.arg has no such map, so no spec is written). */
 	char mname[BPF_OBJ_NAME_LEN + 64];
 	snprintf(mname, sizeof mname, "%s%s", BML_USDT_SPEC_MAP_PREFIX, name);
 	struct bpf_map *m = bpf_object__find_map_by_name(bml_obj_bpf(o->lo), mname);
@@ -190,7 +201,7 @@ static int64_t attach_usdt_body(int64_t obj, const char *prog, int64_t plen, int
 	}
 	char fdpath[32];
 	snprintf(fdpath, sizeof fdpath, "/proc/self/fd/%d", fd);
-	int kpid = pid == 0 ? -1 : (int)pid;
+	int kpid = pid == 0 ? -1 : (int)pid; /* bml's pid 0 means all processes (as in cilium), whereas libbpf uses -1 */
 	if (bpf_program__expected_attach_type(p) == BPF_TRACE_UPROBE_MULTI && !force_perf()) {
 		struct bpf_link *l = NULL;
 		if ((e = attach_multi(p, name, kpid, fdpath, pts, n, &l))) {
@@ -211,7 +222,7 @@ static int64_t attach_usdt_body(int64_t obj, const char *prog, int64_t plen, int
 		free(ls);
 		goto out;
 	}
-	e = abi_link_put_more(ls[0], ls + 1, n - 1);
+	e = abi_link_put_more(ls[0], ls + 1, n - 1); /* all the links of the points go into one handle (bml_detach closes all of them) */
 	free(ls);
 out:
 	free(pts);

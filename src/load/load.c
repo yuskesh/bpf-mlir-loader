@@ -1,3 +1,6 @@
+/* load/load.c — libbpf load with guards. The order is: the ELF shape check; then fixing libbpf's memlock behavior
+ * (done first, because libbpf's feature probes also try to raise memlock); then comparing the feature decisions; then
+ * open (with the fixed options); then recording the map definitions; then load; then the guards after the load. */
 #define _GNU_SOURCE
 #include "load/internal.h"
 #include "load/arena.h"
@@ -34,7 +37,7 @@ void bml_load_result_free(struct bml_load_result *r)
  * decremented by bml_obj_close (1 -> 0 restores it). The C ABI's "one object at a time" holds only for registered objects; guarded loads can overlap in the window between load entry and
  * close. The collection buffer is per thread (libbpf calls print on the calling thread, so logs of concurrent loads do not mix) */
 static __thread struct bml_buf *lb_log;
-static struct bml_buf *lb_log_shared;
+static struct bml_buf *lb_log_shared; /* read only by the mutant load.print_shared_log (the earlier form with one static buffer) */
 static pthread_mutex_t lb_mu = PTHREAD_MUTEX_INITIALIZER;
 static int lb_holders;
 static libbpf_print_fn_t lb_prev;
@@ -67,22 +70,22 @@ static int print_fn(enum libbpf_print_level level, const char *fmt, va_list ap)
 	struct bml_buf *b = BML_MUT("load.print_shared_log") ? lb_log_shared : lb_log;
 	if (!b || level == LIBBPF_DEBUG)
 		return 0;
-	char *tmp = NULL;
+	char *tmp = NULL; /* the verifier log is long, so do not cut it with a fixed buffer */
 	if (vasprintf(&tmp, fmt, ap) < 0)
 		return 0;
-	bml_buf_adds(b, level == LIBBPF_WARN ? "warn: " : "info: ");
+	bml_buf_adds(b, level == LIBBPF_WARN ? "warn: " : "info: "); /* libbpf's own messages start with "libbpf: " */
 	bml_buf_adds(b, tmp);
 	free(tmp);
 	return 0;
 }
 
-
-
+/* libbpf_set_memlock_rlim(0) works once per process (a second call gives EBUSY, once libbpf has made its memlock
+ * decision). If the first call gives EBUSY, someone may have used libbpf and raised memlock before this library, so stop. */
 static int memlock_fixed;
 
 static int fix_memlock(struct bml_load_result *r)
 {
-	if (memlock_fixed || BML_MUT("load.no_memlock_fix"))
+	if (memlock_fixed || BML_MUT("load.no_memlock_fix")) /* mutant control */
 		return 0;
 	int rc = libbpf_set_memlock_rlim(0);
 	if (rc != 0)
@@ -92,7 +95,7 @@ static int fix_memlock(struct bml_load_result *r)
 	return 0;
 }
 
-
+/* Write values into the initial contents of the internal .rodata map (libbpf names it "<object name>.rodata", truncated, so find it by the section-name suffix) */
 static int write_rodata(struct bpf_object *obj, const struct bml_rodata_value *v, size_t n, struct bml_load_result *r)
 {
 	if (!n)
@@ -114,23 +117,25 @@ static int write_rodata(struct bpf_object *obj, const struct bml_rodata_value *v
 			return lb_fail(r, BML_LOAD_ENV, "a configuration value at offset %llu (%u bytes) is outside the %zu-byte .rodata",
 				       (unsigned long long)v[i].off, v[i].size, sz);
 		for (uint32_t b = 0; b < v[i].size; b++)
-			p[v[i].off + b] = (uint8_t)(v[i].bits >> (8 * b));
+			p[v[i].off + b] = (uint8_t)(v[i].bits >> (8 * b)); /* little endian (Linux x86_64 only) */
 	}
 	return 0;
 }
 
 #ifdef BML_TEST_CAPS
-static int usdt_keep_multi;
+static int usdt_keep_multi; /* test hook (bml_testonly_usdt_mode); test state inside the process */
 void bml_load_testonly_usdt_multi(int keep)
 {
 	__atomic_store_n(&usdt_keep_multi, keep, __ATOMIC_SEQ_CST);
 }
 #endif
 
-
-
-
-
+/* For the libbpf section usdt+ (SEC_USDT), the prepare function loads the program with expected_attach_type
+ * BPF_TRACE_UPROBE_MULTI when the kernel supports a uprobe_multi link (libbpf.c; the kernel lets that program be
+ * attached only through a uprobe_multi link). bml changes the program type once and changes it back, which removes the
+ * program's sec_def (libbpf.c's bpf_program__set_type; the prepare function is then not called). The program is
+ * loaded with the 0 it had at open time and attached with one uprobe per point, the same form as cilium, so the way
+ * of attaching does not change with the kernel's features. The process-wide table (libbpf_register_prog_handler) is not used. */
 static void usdt_point_form(struct bpf_object *obj)
 {
 #ifdef BML_TEST_CAPS
@@ -149,8 +154,10 @@ static void usdt_point_form(struct bpf_object *obj)
 	}
 }
 
-
-
+/* At load time libbpf adds BPF_F_SLEEPABLE only to the load arguments (libbpf_prepare_prog_load); it does not show
+ * up in bpf_program__flags, so it cannot be checked after open. For a section such as fentry.s/ that bml's own
+ * table accepts, bml sets the flag itself instead of relying on libbpf's section table. That the flag reaches the
+ * kernel is checked by a test in the VM. */
 int lb_mark_sleepable(struct bpf_object *obj, struct bml_load_result *r)
 {
 	struct bpf_program *p;
@@ -182,9 +189,9 @@ int bml_load_guarded_values(const uint8_t *elf, size_t len, const struct bml_req
 	lb_log_shared = &log;
 	print_hold(o);
 	LIBBPF_OPTS(bpf_object_open_opts, oo, .object_name = "bml", .relaxed_maps = false, .btf_custom_path = "/sys/kernel/btf/vmlinux",
-		    
-
-		    .bpf_token_path = BML_MUT("load.token_default") ? NULL : "");
+		    /* leave the kernel log buffer to libbpf (a buffer of our own does not grow on ENOSPC; this was observed 20 times
+		     * with the bpf+net_admin privilege). The verifier log is collected through libbpf's print output (BEGIN / END PROG LOAD LOG) */
+		    .bpf_token_path = BML_MUT("load.token_default") ? NULL : ""); /* mutant control: NULL is libbpf's default (/sys/fs/bpf) */
 	struct lb_map_def *defs = NULL;
 	size_t ndefs = 0;
 	int rc = -1;
@@ -209,7 +216,7 @@ int bml_load_guarded_values(const uint8_t *elf, size_t len, const struct bml_req
 	if (err) {
 		const char *lg = log.p ? log.p : "";
 		r->verifier = strstr(lg, "BPF program load failed") != NULL;
-
+		/* A failure after libbpf has dropped the BTF (the kernel rejected the BTF and libbpf discarded it and went on) is stated in the message; before, the error message did not mention the dropped BTF */
 		lb_fail(r, BML_LOAD_LIBBPF, "libbpf could not load the object: %s%s", lb_errno(-err),
 			strstr(lg, "BTF is optional, ignoring") ? " (after the kernel rejected the BTF and libbpf dropped it — B2)" : "");
 		goto done;
@@ -220,14 +227,14 @@ int bml_load_guarded_values(const uint8_t *elf, size_t len, const struct bml_req
 		goto done;
 	rc = 0;
 done:
-	lb_log = NULL;
+	lb_log = NULL; /* from now on this thread's print output is discarded */
 	lb_log_shared = NULL;
-	if (rc == 0 && BML_MUT("load.print_passthrough")) {
+	if (rc == 0 && BML_MUT("load.print_passthrough")) { /* mutant: the earlier behavior of restoring the caller's callback right after load */
 		pthread_mutex_lock(&lb_mu);
 		libbpf_set_print(lb_prev);
 		pthread_mutex_unlock(&lb_mu);
 	}
-
+	/* on failure the bml_obj_close below lowers the count (and restores the callback if this was the last holder) */
 	lb_free_maps(defs, ndefs);
 
 	r->log = log.len ? bml_buf_take(&log) : NULL;
@@ -247,7 +254,7 @@ void bml_obj_close(struct bml_obj *o)
 	if (o->obj)
 		bpf_object__close(o->obj);
 	lb_arena_cleanup(o);
-
+	/* Lower the holder count and, if this was the last holder, restore the print callback that libbpf had before the load (after bpf_object__close, so print output from inside close is also discarded) */
 	print_release(o);
 	free(o);
 }

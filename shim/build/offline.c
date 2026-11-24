@@ -1,3 +1,9 @@
+/* shim/build/offline.c — bindrt.Parse(elf) then CheckTarget with the fixed capabilities of a build machine (a build-time export).
+ *
+ * The capabilities are spinel's uprobeBuildCaps as a bml contract (tied to bml_policy_version): HasProgType false, HasHelper
+ * Unknown (requirements.ErrUnknown — unreachable while every program type is unsupported, kept for the contract), HasMapType
+ * false, UprobeBinary from the caller (absent: "no target file for <program>"; the caller's error text as given), UprobeDebugFile
+ * from <debug_root>/.build-id/ (BuildIDDebugPath and ReadUprobeDebugFile — "" does not look up); every other query is absent. */
 #include "shim/build/elf_internal.h"
 
 #include <stdlib.h>
@@ -49,7 +55,7 @@ static int q_uprobe_binary(void *ctx, const char *program, uint8_t **data, size_
 	const struct bml_build_target *t = NULL;
 	*data = NULL;
 	*len = 0;
-	for (size_t i = 0; i < o->n; i++)
+	for (size_t i = 0; i < o->n; i++) /* a program listed twice: the last entry (a Go map keeps the last write) */
 		if (o->t[i].program && !strcmp(o->t[i].program, program))
 			t = &o->t[i];
 	if (t && t->error && BML_MUT("build.target_error_ignored"))

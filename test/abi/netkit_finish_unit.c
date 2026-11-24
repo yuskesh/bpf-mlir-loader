@@ -1,3 +1,5 @@
+/* The failure paths of the check that follows a netkit attach (these tests touch neither the kernel nor root). The inputs
+ * have the same shape as those of the Go reference's finishNetkitAttach and checkNetkitInfo. */
 #include "abi/netkit.h"
 
 #include <errno.h>
@@ -21,7 +23,7 @@ static int f_close(void *c) { (void)c; s.closes++; return s.close_rc; }
 
 static int fails;
 
-
+/* The shape of a well-formed primary / peer link */
 static void base(uint32_t want)
 {
 	memset(&s, 0, sizeof s);
@@ -72,7 +74,7 @@ int main(void)
 	CASE("info-fails-close-fails", PR, -1, "reading the link info", closing, s.info_rc = -EBADF; s.close_rc = -EIO);
 	CASE("peer-fails-close-fails", PE, -1, "querying the peer", closing, s.peer_rc = -EPERM; s.close_rc = -EIO);
 
-
+	/* A real RTM_GETLINK (no root needed): lo has no IFLA_LINK, and an impossible ifindex gives ENODEV */
 	struct abi_nk_peer o;
 	int lo = abi_netkit_query_peer(1, &o), none = abi_netkit_query_peer(0x7ffffff0u, &o);
 	printf("query-lo-no-link: %s\n", lo == 1 ? "PASS" : "FAIL");

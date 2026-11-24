@@ -1,3 +1,14 @@
+/* caps/live_attach.c — the live probes of policy version 7: a C port of kernel/internal/kload/attachctx.go in the Go reference loader
+ * (HasAttachType, AllowsCtxAccess with a paired load, and HasAttachTarget for target kinds iter, rawtp, func, lsm and tp; every other
+ * kind is Unknown). Names and offsets come from the target kernel's BTF: BPF_<UPPERCASE NAME> in enum bpf_attach_type, and the members
+ * of the UAPI ctx structs with anonymous members flattened. A name that is not in the BTF means that kernel does not know it, so the
+ * answer is false; if the name exists, a paired load decides. For an attach type, load `r0 = 0; exit` with expected_attach_type X:
+ * acceptance means true. On rejection, load the same program with expected_attach_type 0 as a control: if the control is accepted and X
+ * was rejected with EINVAL (not a VerifierError) the answer is false, anything else is Unknown. For a ctx access, load the access
+ * followed by `r0 = 0; exit`: acceptance means true. On rejection, load a control without the access: if the control is accepted and
+ * the body failed with a VerifierError the answer is false, anything else is Unknown. Program types that need a BTF attach target
+ * (tracing, lsm, ext, struct_ops) are Unknown. Answers are remembered per key (Go's cachedProbe remembers both the answer and its
+ * sentence). */
 #include "caps/live_internal.h"
 
 #include <errno.h>
@@ -10,11 +21,11 @@
 #include "btf/kernel.h"
 #include "util/gostr.h"
 
-#define UNK ": cannot be determined on this target"
+#define UNK ": cannot be determined on this target" /* the ErrUnknown sentence (the %w of unknownf) */
 
 char *lv_res_text(const struct lv_res *r)
 {
-	if (r->text)
+	if (r->text) /* an error before the load (resolving the attach target); the text is exactly cilium's / kload's */
 		return strdup(r->text);
 	struct bml_buf b = {0};
 	bml_buf_adds(&b, "load program: ");
@@ -32,7 +43,7 @@ char *lv_res_text(const struct lv_res *r)
 			bml_buf_adds(&b, r->suffix);
 		return bml_buf_take(&b);
 	}
-
+	/* VerifierError.Error (cilium v0.22 internal/errors.go): drop the last "processed " line, then join the last line (two when the form needs the previous one) with ": " */
 	size_t n = r->n_lines;
 	if (n > 0 && !strncmp(r->lines[n - 1], "processed ", 10))
 		n--;
@@ -59,7 +70,7 @@ char *lv_res_text(const struct lv_res *r)
 	return bml_buf_take(&b);
 }
 
-
+/* The result of one load (Go's loadOutcome) */
 struct outcome {
 	int accepted, verifier, einval;
 	char *text;
@@ -106,7 +117,7 @@ static char *fmtd(const char *f, ...)
 	return s ? s : strdup("out of memory");
 }
 
-
+/* AttachTypeValue: 0 means found (*v), 1 means not present, -1 means an error (*err, malloc'd) */
 static int attach_type_value(struct bml_live *l, const char *name, uint64_t *v, char **err)
 {
 	const char *verr;
@@ -141,7 +152,7 @@ static int attach_type_value(struct bml_live *l, const char *name, uint64_t *v, 
 	return 1;
 }
 
-
+/* ctxMember: 0 means found (*off), 1 means not present, -1 means an error (*err) */
 static int ctx_member_walk(const struct bml_kbtf *kb, const struct kbtf_type *t, int64_t base, const char *field, int64_t *off, char **err)
 {
 	for (uint32_t i = 0; i < t->vlen; i++) {
@@ -198,8 +209,7 @@ static int ctx_member(struct bml_live *l, const char *st, const char *field, int
 static const uint8_t ret_zero[16] = {0xb7, 0, 0, 0, 0, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 static const uint8_t ret_one[16] = {0xb7, 0, 0, 0, 1, 0, 0, 0, 0x95, 0, 0, 0, 0, 0, 0, 0};
 
-
-
+/* probeRet: where the verifier restricts the return value to exactly 1 (the recvmsg, getpeername and getsockname attach types of cgroup_sock_addr) the probe is `r0 = 1; exit`, otherwise `r0 = 0; exit`, so a rejected return value is not mistaken for a rejected attach type or ctx access. */
 static const uint8_t *probe_ret(const char *at)
 {
 	static const char *const ret_one_types[] = {
@@ -213,7 +223,7 @@ static const uint8_t *probe_ret(const char *at)
 	return ret_zero;
 }
 
-
+/* Return the remembered answer, running f and remembering its result if none exists. An answer is a state, a value and a sentence (the Unknown or error text); a copy is returned. */
 static int memo(struct bml_live *l, const char *key, int (*f)(void *), void *arg, int *out, char **msg, int *val, char **why)
 {
 	struct lv_memo *m = lv_memo_get(l, key);
@@ -255,17 +265,16 @@ static int probe_attach_type(void *p)
 		return BML_Q_UNKNOWN;
 	}
 	if (rc == 1)
-		return BML_Q_OK;
-	
-
+		return BML_Q_OK; /* the target kernel does not know this attach type: false */
+	/* For Tracing, modify_return and trace_iter load `r0 = 0; exit` against a known attach target: acceptance means true and rejection means Unknown. (cilium resolves AttachTo as: modify_return uses the FUNC name, trace_iter the FUNC bpf_iter_<name>.) */
 	const char *tgt = NULL, *resolved = NULL;
 	if (!strcmp(a->at, "modify_return") && a->ptid == BPF_PROG_TYPE_TRACING)
 		tgt = "bpf_modify_return_test", resolved = "bpf_modify_return_test";
 	else if (!strcmp(a->at, "trace_iter") && a->ptid == BPF_PROG_TYPE_TRACING)
 		tgt = "bpf_map", resolved = "bpf_iter_bpf_map";
-	else if ((!strcmp(a->at, "lsm_mac") || !strcmp(a->at, "lsm_cgroup")) && a->ptid == BPF_PROG_TYPE_LSM)
+	else if ((!strcmp(a->at, "lsm_mac") || !strcmp(a->at, "lsm_cgroup")) && a->ptid == BPF_PROG_TYPE_LSM) /* lsm_mac and lsm_cgroup attach types */
 		tgt = "file_open", resolved = "bpf_lsm_file_open";
-	else if (!strcmp(a->at, "trace_fsession") && a->ptid == BPF_PROG_TYPE_TRACING)
+	else if (!strcmp(a->at, "trace_fsession") && a->ptid == BPF_PROG_TYPE_TRACING) /* same as a load with a raw BTF id */
 		tgt = "bpf_fentry_test1", resolved = "bpf_fentry_test1";
 	if (tgt) {
 		struct lv_prog p = {0};
@@ -290,7 +299,7 @@ static int probe_attach_type(void *p)
 		free(t);
 		return BML_Q_UNKNOWN;
 	}
-
+	/* linkOnlyAttachType: the perf_event attach type is a BPF_LINK_CREATE type only, so the answer is the acceptance of a load with expected_attach_type 0 */
 	if (a->ptid == BPF_PROG_TYPE_PERF_EVENT && !strcmp(a->at, "perf_event")) {
 		struct outcome ctl;
 		probe_load(a->l, (uint32_t)a->ptid, 0, ret_zero, 2, &ctl);
@@ -308,13 +317,13 @@ static int probe_attach_type(void *p)
 		a->why = fmtd("program type %s needs a BTF attach target to load (no expected-attach-type probe)" UNK, a->pt);
 		return BML_Q_UNKNOWN;
 	}
-
+	/* An attach type that attaches to a sockmap is asked for the load and also for a sockmap BPF_LINK_CREATE (a rejected load is handled by the paired load below). */
 	if (a->ptid == BPF_PROG_TYPE_SK_SKB || a->ptid == BPF_PROG_TYPE_SK_MSG) {
 		int src = lv_sockmap_link_probe(a->l, a->pt, (uint32_t)a->ptid, a->at, (uint32_t)v, &a->val, &a->why);
 		if (src != -2)
 			return src;
 	}
-
+	/* The kprobe multi and session attach types are asked for the load and for creating the link (a kernel without CONFIG_FPROBE passes the load alone). */
 	if (a->ptid == BPF_PROG_TYPE_KPROBE &&
 	    (!strcmp(a->at, "trace_kprobe_multi") || !strcmp(a->at, "trace_uprobe_multi") || !strcmp(a->at, "trace_kprobe_session"))) {
 		int src = lv_multi_link_probe(a->l, a->pt, a->at, (uint32_t)v, &a->val, &a->why);
@@ -387,13 +396,13 @@ static int probe_ctx_access(void *p)
 		return BML_Q_UNKNOWN;
 	}
 	if (rc == 1)
-		return BML_Q_OK;
+		return BML_Q_OK; /* the UAPI struct of the target kernel has no such field: false */
 	uint8_t sz;
 	switch (a->bytes) {
-	case 1: sz = 0x10; break;
-	case 2: sz = 0x08; break;
-	case 4: sz = 0x00; break;
-	case 8: sz = 0x18; break;
+	case 1: sz = 0x10; break; /* BPF_B */
+	case 2: sz = 0x08; break; /* BPF_H */
+	case 4: sz = 0x00; break; /* BPF_W */
+	case 8: sz = 0x18; break; /* BPF_DW */
 	default:
 		a->why = fmtd("ctx access width %lld", (long long)a->bytes);
 		return BML_Q_ERROR;
@@ -401,17 +410,17 @@ static int probe_ctx_access(void *p)
 	uint8_t ins[32] = {0};
 	size_t n;
 	int16_t o16 = (int16_t)off;
-	if (!strcmp(a->mode, "w")) {
+	if (!strcmp(a->mode, "w")) { /* r2 = 0; *(uN *)(r1 + off) = r2 */
 		ins[0] = 0xb7, ins[1] = 0x02;
 		ins[8] = (uint8_t)(0x63 | sz), ins[9] = 0x21;
 		memcpy(ins + 10, &o16, 2);
 		n = 2;
-	} else {
+	} else { /* r2 = *(uN *)(r1 + off) */
 		ins[0] = (uint8_t)(0x61 | sz), ins[1] = 0x12;
 		memcpy(ins + 2, &o16, 2);
 		n = 1;
 	}
-	memcpy(ins + n * 8, probe_ret(a->at), 16);
+	memcpy(ins + n * 8, probe_ret(a->at), 16); /* both the body and the control use probeRet */
 	struct outcome x, ctl;
 	probe_load(a->l, (uint32_t)a->ptid, (uint32_t)v, ins, n + 2, &x);
 	if (x.accepted) {
@@ -441,9 +450,10 @@ int bml_live_ctx_access(struct bml_live *l, const char *pt, int64_t ptid, const 
 	return rc;
 }
 
-
-
-
+/* HasAttachTarget. Checked against the target's vmlinux BTF: kind iter (FUNC bpf_iter_<value>; absent means false), kind rawtp
+ * (TYPEDEF btf_trace_<value>; absent means Unknown) and kind func (FUNC <value>; absent means Unknown). Kind lsm (FUNC
+ * bpf_lsm_<value>; absent means false) is checked the same way. Kind tp is checked against tracefs events/<cat>/<name>/id
+ * (a missing or unreadable file means Unknown; see live_v11.c). Every other kind is Unknown. */
 int bml_live_attach_target(struct bml_live *l, const char *at, const char *kind, const char *value, int *out, char **msg)
 {
 	(void)at;
@@ -476,7 +486,7 @@ int bml_live_attach_target(struct bml_live *l, const char *at, const char *kind,
 	}
 	int st = BML_Q_UNKNOWN;
 	if ((iter || lsm) && rc == 1)
-		st = BML_Q_OK;
+		st = BML_Q_OK; /* ErrNotFound: iter targets and LSM hooks do not exist outside vmlinux, so the answer is false */
 	else if (iter || lsm)
 		*msg = fmtd("looking up bpf_%s_%s failed (%s)" UNK, iter ? "iter" : "lsm", value, err ? err : "");
 	else if (rawtp)

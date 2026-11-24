@@ -1,3 +1,5 @@
+/* req/check_v13.c — judgement version 12, for the rows of format version 13 (a port of checkProgLoader, checkKfuncs and checkV13
+ * (trace_lsm_cgroup and ksyscall) in bpf-mlir's go/requirements/companion_v13.go). The Unmet messages are in unmet.c. */
 #include "req/check_internal.h"
 
 #include <stdlib.h>
@@ -9,7 +11,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* the loader name as written by %q (malloc-ed) */
 static char *qname(const struct bml_loader_decl *d)
 {
 	struct bml_buf b = {0};
@@ -22,7 +24,8 @@ static const char *val(const char *s)
 	return s ? s : "";
 }
 
-
+/* checkProgLoader: runs after the generic rows (version 9 and later) and the version-13 family rows; asks whether the loader can load an
+ * lsm_cgroup or fsession program. */
 int ck_check_prog_loader(struct ck *c, const struct bml_attach *a)
 {
 	const char *AT = a->attach_type.p, *P = a->program.p, *T = a->target.p;
@@ -53,7 +56,8 @@ int ck_check_prog_loader(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* checkTPBuffer: the pointee of tracepoint argument 0 named by a tpbuf row. A mismatch is reported as attach and an undecidable answer as
+ * attach_unknown; both block the load. */
 int ck_check_tpbuf(struct ck *c, const struct bml_attach *a)
 {
 	if (!a->tpbuf_type.len || BML_MUT("check.tpbuf_skip"))
@@ -88,7 +92,8 @@ int ck_check_tpbuf(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* checkKfuncLoad: whether the initial profile lets the program use the kfunc. A false answer is reported as kfunc_allowed (blocks the
+ * load); an undecidable one as kfunc_allowed_unknown (does not block). */
 static int check_kfunc_load(struct ck *c, const struct bml_kfunc *k)
 {
 	const char *P = k->program.p, *N = k->name.p;
@@ -122,7 +127,7 @@ static int check_kfunc_load(struct ck *c, const struct bml_kfunc *k)
 	return 0;
 }
 
-
+/* checkKfuncs: runs before the attach loop, in the order of the format document (also for programs that have a program-type Unmet). */
 int ck_check_kfuncs(struct ck *c)
 {
 	int has = HAS(c, kfunc, BML_QUERY_KFUNC_PROTOS);
@@ -135,7 +140,7 @@ int ck_check_kfuncs(struct ck *c)
 		struct bml_strs d = {0};
 		char *msg = NULL;
 		int st = c->caps->kfunc(c->caps->ctx, k->name.p, k->ret.p, k->args, k->n_args, &d, &msg);
-		if (st == BML_Q_OK && BML_MUT("check.kfunc_args_skip"))
+		if (st == BML_Q_OK && BML_MUT("check.kfunc_args_skip")) /* drop the mismatches of argument count and types (the return type and absence are kept) */
 			for (size_t j = d.n; j-- > 0;)
 				if (!strncmp(d.s[j], "argument ", 9) || strstr(d.s[j], " arguments (")) {
 					free(d.s[j]);
@@ -151,13 +156,14 @@ int ck_check_kfuncs(struct ck *c)
 		free(msg);
 		int match = d.n == 0;
 		ck_add_diffs(c, "kfunc_sig", k->program.p, k->name.p, &d);
-		if (match && !BML_MUT("check.kfunc_allowed_skip") && check_kfunc_load(c, k))
+		if (match && !BML_MUT("check.kfunc_allowed_skip") && check_kfunc_load(c, k)) /* judgement version 13: asked only after the prototype matched */
 			return -1;
 	}
 	return 0;
 }
 
-
+/* checkKsyscall: checks, in this order, the arch and the ctx, then the wrapper (__x64_sys_<name>, using the prefix of the declared arch;
+ * aliases are not asked about), then sysarg, then the loader's ksyscall_attach. */
 static int check_ksyscall(struct ck *c, const struct bml_attach *a)
 {
 	const char *P = a->program.p, *T = a->target.p;
@@ -166,7 +172,7 @@ static int check_ksyscall(struct ck *c, const struct bml_attach *a)
 		free(ta);
 		return -1;
 	}
-	char *w = !strcmp(a->arch.p, "x86_64") ? ck_fmtd("__x64_sys_%s", T) : NULL;
+	char *w = !strcmp(a->arch.p, "x86_64") ? ck_fmtd("__x64_sys_%s", T) : NULL; /* SyscallPrefixes */
 	if (!w) {
 		struct bml_buf b = {0};
 		bml_buf_adds(&b, "no syscall wrapper prefix known for the arch ");
@@ -227,7 +233,7 @@ static int check_ksyscall(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* checkV13: trace_lsm_cgroup asks the same questions as the generic row lsm_cgroup lsm:<hook>, plus checkLSMArgs; ksyscall uses checkKsyscall. */
 int ck_check_v13(struct ck *c, const struct bml_attach *a)
 {
 	if (!strcmp(a->attach_type.p, "ksyscall"))

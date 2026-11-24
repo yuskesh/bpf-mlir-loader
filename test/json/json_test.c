@@ -1,3 +1,6 @@
+// test/unit/json_test.c — unit tests of bml_json. Run them in an ASan + UBSan build (a leak also fails the run).
+// They cover the five classes of strictness (inputs that Go accepts and C rejects), the freeing on failure paths (including a
+// leak that fuzzing found, when an element of an array fails), and the reading of numbers.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,14 +55,14 @@ static void num(const char *s, int want_ok, uint64_t want)
 
 int main(void)
 {
-
+	/* Go's encoding/json accepts these and C rejects them (a deliberate decision, to keep C strict) */
 	ERR("{\"a\":1,\"a\":2}", "duplicate key");
 	ERR("{\"a\":\"\xff\"}", "invalid UTF-8");
 	ERR("\"\\ud800\"", "unpaired surrogate");
 	ERR("\"\\udc00\"", "unpaired surrogate");
 	ERR("{} x", "trailing data");
 	ERR("{}{}", "trailing data");
-
+	/* Depth: 128 is accepted and 129 is rejected */
 	{
 		char in[600], *p = in;
 		for (int i = 0; i < 129; i++)
@@ -69,7 +72,7 @@ int main(void)
 		expect(in, 258, "nesting too deep");
 		expect(in + 1, 256, NULL);
 	}
-
+	/* Both reject */
 	ERR("", "unexpected end");
 	ERR("{\"a\":}", "");
 	ERR("[1,]", "");
@@ -77,15 +80,15 @@ int main(void)
 	ERR("01", "trailing data");
 	ERR("1.", "bad number");
 	ERR("tru", "unexpected token");
-
+	/* Freeing on failure paths (the leaks found by fuzzing: failure of an element inside an array, and an array inside an object) */
 	ERR("{\"k\":[{\"x\":)]}", "");
 	ERR("[[[\"a\",{\"b\":[1,2,}]]]", "");
 	ERR("{\"a\":[\"x\",\"\xff\"]}", "invalid UTF-8");
-
+	/* Accepted */
 	OK("{\"a\":[1,-2,3.5e+2,true,false,null,\"\\u00e9\\ud83d\\ude00\\n\"]}");
 	OK("  \n{}\n");
-	OK("{\"A\":1,\"a\":2}");
-
+	OK("{\"A\":1,\"a\":2}"); /* keys that differ in case are different keys (ignoring case is rejected by the code that reads the object) */
+	/* Numbers (as Go's json decodes into a uint64) */
 	num("0", 1, 0);
 	num("18446744073709551615", 1, UINT64_MAX);
 	num("18446744073709551616", 0, 0);
@@ -93,7 +96,7 @@ int main(void)
 	num("-0", 0, 0);
 	num("1e3", 0, 0);
 	num("1.0", 0, 0);
-
+	/* writer: Go's escaping */
 	{
 		struct bml_buf b = {0};
 		bml_json_write_string(&b, "a\"\\\n\r\t\x01<>&\xe2\x80\xa8\xff", 14);

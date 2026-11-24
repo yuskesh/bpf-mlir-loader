@@ -1,3 +1,11 @@
+/* abi/run.c — attach (XDP), detach and test run.
+ *
+ * A test run is BPF_PROG_TEST_RUN with a repeat of 1, issued repeat times (the same form as the
+ * downstream mojo loader). With a kernel repeat greater than 1, a run interrupted by a signal returns
+ * EINTR, and cilium v0.22 then redoes the whole run, so the iterations the kernel already ran are
+ * added to the count again. This library does not redo after EINTR: it returns a BML_OTHER result
+ * whose value is the number of runs completed before the interruption, so the caller knows the count
+ * and the count is never silently increased. */
 #define _GNU_SOURCE
 #include "abi/internal.h"
 
@@ -14,7 +22,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* Makes the name (ptr, len) NUL-terminated. A name with a NUL inside is not a name, so it is not found. */
 static char *name_of(const char *s, int64_t n)
 {
 	if (n < 0 || (!s && n))
@@ -65,7 +73,7 @@ static int64_t attach_xdp_body(int64_t obj, const char *prog, int64_t prog_len, 
 		free(ifn);
 		return e;
 	}
-	struct bpf_link *l = bpf_program__attach_xdp(p, (int)idx);
+	struct bpf_link *l = bpf_program__attach_xdp(p, (int)idx); /* a bpf_link (BPF_LINK_CREATE, flags 0), the same form as cilium's link.AttachXDP */
 	if (!l) {
 		e = abi_fail(BML_OTHER, "bml: attach %s to %s: %s", bpf_program__name(p), ifn, abi_errno(errno));
 		free(ifn);
@@ -98,7 +106,7 @@ static int64_t link_put(struct bpf_link *l, int64_t owner, char *file, int *fds,
 		al->extra_fds = fds;
 		al->n_extra = n;
 		abi_lock();
-		id = abi_handle_new(H_LINK, al, 0);
+		id = abi_handle_new(H_LINK, al, 0); /* the link is not closed by closing the object (the kernel link keeps the program alive, as downstream) */
 		abi_unlock();
 	}
 	if (id < 0) {
@@ -133,13 +141,13 @@ int64_t abi_link_put_more(struct bpf_link *l, struct bpf_link **more, size_t n)
 	if (n)
 		memcpy(m, more, n * sizeof *m);
 	int64_t r = link_put(l, 0, NULL, NULL, 0);
-	if (bml_result_kind(r) != BML_OK) {
+	if (bml_result_kind(r) != BML_OK) { /* link_put destroyed l */
 		for (size_t i = 0; i < n; i++)
 			bpf_link__destroy(m[i]);
 		free(m);
 		return r;
 	}
-	int64_t id = bml_result_value(r);
+	int64_t id = bml_result_value(r); /* the result accessor takes abi_lock, so call it outside the lock */
 	abi_lock();
 	struct abi_link *al = abi_handle_get(id, H_LINK);
 	al->more = m;
@@ -168,7 +176,7 @@ int abi_link_dup_fd(int64_t link, int64_t *err)
 
 int64_t bml_detach(int64_t link)
 {
-
+	/* idempotent: a second call is OK too, because the entry stays in the table */
 	abi_lock();
 	struct abi_link *al = abi_handle_get(link, H_LINK);
 	struct bpf_link *l = al ? al->l : NULL;
@@ -188,11 +196,11 @@ int64_t bml_detach(int64_t link)
 		return abi_fail(BML_STATE, "bml: no link %lld", (long long)link);
 	if (!l)
 		return abi_ok(0);
-
+	/* The second and later per-point uprobe links of a USDT attach (mutation usdt.keep_more leaves them open, to see whether the tests catch the leak). */
 	for (size_t i = 0; i < n_more && !BML_MUT("usdt.keep_more"); i++)
 		bpf_link__destroy(more[i]);
 	free(more);
-
+	/* Also close the perf events of the other CPUs of a tracepoint attach (mutation attach.tp_keep_extra leaves them open, to see whether the tests catch the leak). */
 	if (BML_MUT("attach.tp_keep_extra"))
 		free(fds);
 	else
@@ -202,7 +210,7 @@ int64_t bml_detach(int64_t link)
 	return abi_ok(0);
 }
 
-
+/* One test run (repeat 1). Success is 0 with *ret; failure is -errno. */
 static int run_once(int fd, const uint8_t *data, size_t n, uint32_t *ret)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, t, .data_in = data, .data_size_in = (uint32_t)n, .repeat = 1);
@@ -219,14 +227,14 @@ static int64_t test_run_xdp_body(int64_t obj, const char *prog, int64_t prog_len
 	struct bpf_program *p;
 	if (!o || (e = abi_program(o, prog, prog_len, &p)) || (e = want_xdp(p, "test-run")))
 		return e;
-
+	/* The count must be at least 1. This removes by contract the downstream disagreement over whether 0 means one run or none. */
 	if (repeat < 1)
 		return abi_fail(BML_VALUE_RANGE, "bml: test run %s: the run count %lld is below 1", bpf_program__name(p), (long long)repeat);
-	static const uint8_t frame[64];
+	static const uint8_t frame[64]; /* the size of a minimal Ethernet frame (the program does not read its contents) */
 	uint32_t ret = 0;
 	for (int64_t i = 0; i < repeat; i++) {
 		int rc = run_once(bpf_program__fd(p), frame, sizeof frame, &ret);
-		if (i == 2 && BML_MUT("run.fake_eintr_at_3"))
+		if (i == 2 && BML_MUT("run.fake_eintr_at_3")) /* a kernel run with repeat 1 never returns EINTR, so a mutation exercises the branch's message and value */
 			rc = -EINTR;
 		if (rc == -EINTR) {
 			struct abi_result r = {.kind = BML_OTHER, .value = i};

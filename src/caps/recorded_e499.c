@@ -1,3 +1,6 @@
+/* caps/recorded_e499.c — the kfunc_loads (which depend on privilege; ForLoad probes again) and tracepoint_buffer of recorded caps, a C
+ * port of HasKfuncLoad and CheckTracepointBuffer of RecordedCaps, and KfuncLoadKey (Go's json.Marshal of an array, shared by the
+ * recorder and the live caps) */
 #include "caps/recorded_internal.h"
 
 #include <stdio.h>
@@ -66,7 +69,7 @@ static int rec_kfunc_load(void *ctx, const struct bml_kfunc_profile *p, const ch
 
 static int rec_tracepoint_buffer(void *ctx, const char *name, const char *pointee, struct bml_strs *out, char **msg)
 {
-	char *key = rc_fmts("%s/0/%s", name, pointee);
+	char *key = rc_fmts("%s/0/%s", name, pointee); /* TracepointBufferKey */
 	if (!key)
 		return (*msg = strdup("out of memory"), BML_Q_ERROR);
 	int st = rc_diffs(ctx, BML_QUERY_TRACEPOINT_BUFFER, key, out, msg);

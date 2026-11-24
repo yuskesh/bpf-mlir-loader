@@ -29,7 +29,7 @@ static int str_is(const struct bml_str *s, const char *lit)
 	return s->len == strlen(lit) && memcmp(s->p, lit, s->len) == 0;
 }
 
-
+/* The attach row of a program (NULL if none). */
 static const struct bml_attach *attach_row(const struct abi_object *o, const char *name)
 {
 	for (size_t i = 0; i < o->req->n_attaches; i++)
@@ -38,7 +38,7 @@ static const struct bml_attach *attach_row(const struct abi_object *o, const cha
 	return NULL;
 }
 
-
+/* The name of a program kind (used in the mix-up message). */
 const char *abi_kind_name(const struct abi_object *o, struct bpf_program *p)
 {
 	const struct bml_attach *a = attach_row(o, bpf_program__name(p));
@@ -53,14 +53,14 @@ const char *abi_kind_name(const struct abi_object *o, struct bpf_program *p)
 			return "fexit";
 		if (at == BPF_TRACE_RAW_TP)
 			return "tp_btf";
-		if (at == BPF_MODIFY_RETURN)
+		if (at == BPF_MODIFY_RETURN) /* fmod_ret */
 			return "fmod_ret";
 		if (at == BPF_TRACE_ITER)
 			return "iter";
 		break;
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 		return "raw_tp";
-	case BPF_PROG_TYPE_CGROUP_SKB:
+	case BPF_PROG_TYPE_CGROUP_SKB: /* attach to a caller-supplied cgroup */
 		return at == BPF_CGROUP_INET_EGRESS ? "cgroup_skb egress" : "cgroup_skb ingress";
 	case BPF_PROG_TYPE_SK_LOOKUP:
 		return "sk_lookup";
@@ -68,14 +68,14 @@ const char *abi_kind_name(const struct abi_object *o, struct bpf_program *p)
 		return "flow_dissector";
 	case BPF_PROG_TYPE_SOCKET_FILTER:
 		return "socket_filter";
-	case BPF_PROG_TYPE_KPROBE:
+	case BPF_PROG_TYPE_KPROBE: /* kretprobe and uretprobe are told apart by the attach row (the kprobe / uprobe family of rows, requirements format version 9) */
 		if (a && str_is(&a->attach_type, "uprobe"))
 			return "uprobe";
 		if (a && str_is(&a->attach_type, "uretprobe"))
 			return "uretprobe";
 		if (a && str_is(&a->attach_type, "kretprobe"))
 			return "kretprobe";
-		if (a && str_is(&a->attach_type, "ksyscall"))
+		if (a && str_is(&a->attach_type, "ksyscall")) /* handled by bml_attach_ksyscall */
 			return "ksyscall";
 		return "kprobe";
 	case BPF_PROG_TYPE_SCHED_CLS:
@@ -83,7 +83,7 @@ const char *abi_kind_name(const struct abi_object *o, struct bpf_program *p)
 			return "tc ingress";
 		if (at == BPF_TCX_EGRESS)
 			return "tc egress";
-		if (at == BPF_NETKIT_PRIMARY)
+		if (at == BPF_NETKIT_PRIMARY) /* netkit */
 			return "netkit primary";
 		if (at == BPF_NETKIT_PEER)
 			return "netkit peer";
@@ -111,7 +111,7 @@ static int64_t attach_trace_body(int64_t obj, const char *prog, int64_t len, enu
 	return abi_link_put(l);
 }
 
-
+/* Stores the name of the kprobe function from the perf link info in buf ("" if the link is not a perf link of the wanted type, KPROBE or KRETPROBE). Success is 0; failure is -errno. */
 int abi_kprobe_link_name(int fd, uint32_t want, char *buf, uint32_t cap)
 {
 	struct bpf_link_info info;
@@ -128,7 +128,7 @@ int abi_kprobe_link_name(int fd, uint32_t want, char *buf, uint32_t cap)
 	return 0;
 }
 
-
+/* kprobe and kretprobe (the kretprobe <fn> row of the kprobe family of attach rows, requirements format version 9): the kind is the attach type of the attach row. */
 static int64_t attach_kprobe_body(int64_t obj, const char *prog, int64_t len, int ret)
 {
 	int64_t e;
@@ -154,10 +154,10 @@ static int64_t attach_kprobe_body(int64_t obj, const char *prog, int64_t len, in
 		return abi_fail(BML_OTHER, "bml: attach %s %s to %s: %s%s", kind, name, fn, abi_errno(err),
 				err == EPERM ? " (hint: attaching a kprobe needs CAP_PERFMON; perf_event_paranoid may also restrict it)" : "");
 	}
-
+	/* Compare the real attach target after the attach (from the perf link info, type included) with the declaration. */
 	char got[512];
 	int rc = abi_kprobe_link_name(bpf_link__fd(l), ret ? BPF_PERF_EVENT_KRETPROBE : BPF_PERF_EVENT_KPROBE, got, sizeof got);
-	if (rc == 0 && BML_MUT(ret ? "attach.kretprobe_info_other" : "trace.kprobe_info_other"))
+	if (rc == 0 && BML_MUT(ret ? "attach.kretprobe_info_other" : "trace.kprobe_info_other")) /* a mutation that tries the form where the kernel attached to another function */
 		snprintf(got, sizeof got, "__x64_%s", fn);
 	if (rc != 0) {
 		bpf_link__destroy(l);
@@ -173,9 +173,9 @@ static int64_t attach_kprobe_body(int64_t obj, const char *prog, int64_t len, in
 	return abi_link_put(l);
 }
 
-
+/* ---- tp_btf ---- */
 #ifdef BML_TEST_CAPS
-
+/* Test build only: substitutes the declared tracepoint name (an empty string restores it); a control for the comparison. */
 static pthread_mutex_t tp_mu = PTHREAD_MUTEX_INITIALIZER;
 static char tp_declared[128];
 int64_t bml_testonly_tpbtf_declared(const char *tp, int64_t len)
@@ -191,7 +191,7 @@ int64_t bml_testonly_tpbtf_declared(const char *tp, int64_t len)
 }
 #endif
 
-
+/* Stores the tracepoint name from a raw tracepoint link's info in buf ("" if the link is not a raw tracepoint link). Success is 0; failure is -errno. */
 static int tp_link_name(int fd, char *buf, uint32_t cap)
 {
 	struct bpf_link_info info;
@@ -234,7 +234,7 @@ static int64_t attach_tp_btf_body(int64_t obj, const char *prog, int64_t len)
 	struct bpf_link *l = bpf_program__attach_trace(p);
 	if (!l)
 		return abi_fail(BML_OTHER, "bml: attach tp_btf %s: %s", name, abi_errno(errno));
-
+	/* Compare the real tracepoint after the attach (from the raw tracepoint link info) with the declaration. */
 	char got[256];
 	int rc = tp_link_name(bpf_link__fd(l), got, sizeof got);
 	if (rc != 0) {
@@ -251,13 +251,13 @@ static int64_t attach_tp_btf_body(int64_t obj, const char *prog, int64_t len)
 	return abi_link_put(l);
 }
 
-
+/* ---- the tracing test run (on a short-lived thread) ---- */
 struct trun {
 	int fd;
 	int64_t n, done;
 	int err;
 	pid_t tid;
-	sigset_t mask;
+	sigset_t mask; /* the mask inside the thread (a test entry; only a BML_TEST_CAPS build exposes it) */
 };
 
 static void *trun_main(void *arg)
@@ -265,7 +265,7 @@ static void *trun_main(void *arg)
 	struct trun *x = arg;
 	x->tid = (pid_t)syscall(SYS_gettid);
 #ifdef BML_TEST_CAPS
-	pthread_sigmask(SIG_BLOCK, NULL, &x->mask);
+	pthread_sigmask(SIG_BLOCK, NULL, &x->mask); /* read only (test build) */
 #endif
 	for (int64_t i = 0; i < x->n; i++) {
 		LIBBPF_OPTS(bpf_test_run_opts, t, .repeat = 1);
@@ -282,7 +282,7 @@ static void *trun_main(void *arg)
 static pthread_mutex_t test_mu = PTHREAD_MUTEX_INITIALIZER;
 static sigset_t test_mask;
 static int test_have;
-
+/* Test build only: the signal mask inside the thread of the last test_run_tracing (-1 if there is none). */
 int bml_testonly_tracing_sigmask(sigset_t *out)
 {
 	pthread_mutex_lock(&test_mu);
@@ -304,11 +304,11 @@ static int64_t test_run_tracing_body(int64_t obj, const char *prog, int64_t len,
 	const char *name = bpf_program__name(p);
 	if (bpf_program__type(p) != BPF_PROG_TYPE_TRACING)
 		return abi_fail(BML_STATE, "bml: %s is a %s program, not fentry or fexit — test_run_tracing runs tracing programs", name, abi_kind_name(o, p));
-
+	/* The count must be at least 1 (the same as test_run_xdp). */
 	if (n < 1)
 		return abi_fail(BML_VALUE_RANGE, "bml: tracing test run %s: the run count %lld is below 1", name, (long long)n);
 	struct trun x = {.fd = bpf_program__fd(p), .n = n};
-	if (BML_MUT("trace.run_on_caller")) {
+	if (BML_MUT("trace.run_on_caller")) { /* runs on the caller's thread (the tid equals the caller's; a control for the tests) */
 		trun_main(&x);
 	} else {
 		pthread_attr_t at;
@@ -331,7 +331,7 @@ static int64_t test_run_tracing_body(int64_t obj, const char *prog, int64_t len,
 	test_have = 1;
 	pthread_mutex_unlock(&test_mu);
 #endif
-
+	/* A hint only for the EFAULT of tp_btf (it goes to the kernel as it is and the verdict is not changed). On the three tested kernels (7.1.8, 6.12 and 6.6), bpf_prog_test_run_tracing does not run a tp_btf program. */
 	int tp_hint = x.err == EFAULT && bpf_program__expected_attach_type(p) == BPF_TRACE_RAW_TP && !BML_MUT("trace.tpbtf_no_run_hint");
 	if (x.err)
 		return abi_fail(BML_OTHER, "bml: tracing test run %s (run %lld of %lld): %s%s", name, (long long)(x.done + 1), (long long)n, abi_errno(x.err),
@@ -339,7 +339,7 @@ static int64_t test_run_tracing_body(int64_t obj, const char *prog, int64_t len,
 	return abi_ok((int64_t)x.tid);
 }
 
-
+/* ---- public entries (each counts as a running call of the object) ---- */
 int64_t bml_attach_fentry(int64_t obj, const char *prog, int64_t prog_len)
 {
 	int64_t e;

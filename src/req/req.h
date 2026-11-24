@@ -11,10 +11,12 @@
 #include "req/mapfield.h"
 
 #define BML_REQ_SECTION ".ebpf_requirements"
+/* Highest format version this reader accepts. What each version added: enum farg 19, enumval 20, fibflags 21, enum kfield 22, datakptr 23,
+ * extern/guard 24, ptr:void 25, coreenum 26, funcret 27, kstructsize 28, arena 29, netkit 30, helper_target 31, sleepable 32. */
 #define BML_MAX_FORMAT_VERSION 32
 
 struct bml_str {
-	char *p;
+	char *p; /* NUL-terminated (it may contain NUL bytes inside; len is authoritative) */
 	size_t len;
 };
 
@@ -35,7 +37,7 @@ struct bml_program {
 struct bml_map {
 	struct bml_str symbol, map_type;
 	int64_t id;
-	struct bml_str key, value;
+	struct bml_str key, value; /* empty in version 1 */
 	uint64_t max_entries, flags;
 };
 
@@ -58,9 +60,9 @@ struct bml_attach {
 	struct bml_str program, attach_type, target;
 	struct bml_str *args;
 	size_t n_args, cap_args;
-	struct bml_str *fargs;
+	struct bml_str *fargs; /* farg rows (trace_fentry, format 8): the struct name of argument i, or - */
 	size_t n_fargs, cap_fargs;
-	int64_t ret_nargs;
+	int64_t ret_nargs; /* < 0 means there is no retsig row */
 	struct bml_str ret_type;
 	struct bml_str func_ret;
 	struct bml_str arch;
@@ -71,11 +73,11 @@ struct bml_attach {
 	struct bml_str binary_sha256;
 	struct bml_intarg *uprobe_args;
 	size_t n_uprobe_args, cap_uprobe_args;
-
+	/* Format 9: the generic attach row (it has no companion rows). tkind is the kind of the target and tval its value (empty if there is none). */
 	int generic;
 	struct bml_str tkind, tval;
-	
-
+	/* Format 11: the tpfield rows of trace_tp (offset strictly ascending), the extret (ext_nargs < 0 means none) and extarg rows of freplace,
+	 * and the structop row of trace_struct_ops (retsig and farg use ret_nargs, ret_type and fargs). */
 	struct bml_tpfield *tpfields;
 	size_t n_tpfields, cap_tpfields;
 	int64_t ext_nargs;
@@ -83,64 +85,67 @@ struct bml_attach {
 	struct bml_str *ext_args;
 	size_t n_ext_args, cap_ext_args;
 	struct bml_str sop_struct, sop_member;
-
+	/* Format 12: for the multi family, the number of functions (the target of the attach row) and the mtarget rows; for usdt, usdtsem
+	 * (empty, required or none) and usdtarg. */
 	int64_t multi_n;
 	struct bml_str *mtargets;
 	size_t n_mtargets, cap_mtargets;
 	struct bml_str usdt_sem;
 	struct bml_intarg *usdt_args;
 	size_t n_usdt_args, cap_usdt_args;
-
+	/* Format 13: the sysarg rows of ksyscall (n strictly ascending) and the mtargetarg rows of the multi family ((i, n) in lexicographic order). */
 	struct bml_intarg *sys_args;
 	size_t n_sys_args, cap_sys_args;
 	struct bml_mtargetarg *mtarget_args;
 	size_t n_mtarget_args, cap_mtarget_args;
-	struct bml_str tpbuf_type;
-	int sleepable;
+	struct bml_str tpbuf_type; /* Format 14: the type of the tpbuf row (i32, empty if there is none). */
+	int sleepable; /* Format 32: the sleepable row (directly after the trace_fentry attach row, section fentry.s/<fn>). */
 };
 
-
+/* `helper_target <program> d_path 147 trace_fentry <target> 0 path` (format 31) */
 struct bml_helper_target {
 	struct bml_str program, helper, attach_type, target, arg_type;
 	int64_t helper_id, arg_index;
 };
 
-
+/* The initial profile of one program. If reason is not NULL the profile could not be derived (the text that follows Go's ErrUnknown).
+ * The strings are malloc-ed. */
 struct bml_kfunc_profile_entry {
 	char *program, *reason;
-	const char *kind, *prog_type, *attach_type, *target_kind;
+	const char *kind, *prog_type, *attach_type, *target_kind; /* strings from a static table */
 	char *section, *target, *context_identity;
 	int64_t prog_type_id;
 	uint32_t prog_flags;
 };
 
-
+/* `mtargetarg <program> <i> <n> <type>` (format 13) */
 struct bml_mtargetarg {
 	int64_t i, n;
 	struct bml_str type;
 };
 
-
+/* `kfunc <program> <name> <ret> <arg>…` (format 13; 0 to 5 arguments) */
 struct bml_kfunc {
 	struct bml_str program, name, ret;
 	struct bml_str *args;
 	size_t n_args;
 };
 
-
+/* `innermap <outer> <map type> <id> <key> <value> <max_entries> <flags>` (format 12): the template of the inner maps of an
+ * array_of_maps / hash_of_maps map */
 struct bml_innermap {
 	struct bml_str outer, map_type, key, value;
 	int64_t id;
 	uint64_t max_entries, flags;
 };
 
-
+/* `tpfield <program> <field> <offset> <byte count> <i|u>` (format 11) */
 struct bml_tpfield {
 	struct bml_str field, sign;
 	int64_t offset, bytes;
 };
 
-
+/* Format 9: `ctxaccess <program> <attach type|-> <struct> <field> <r|w> <byte count>` */
 struct bml_ctxaccess {
 	struct bml_str program, attach_type, strct, field, mode;
 	int64_t bytes;
@@ -161,7 +166,7 @@ struct bml_requirements {
 	struct bml_str schema_sha256;
 	struct bml_program *programs;
 	size_t n_programs, cap_programs;
-	struct bml_helper_target *helper_targets;
+	struct bml_helper_target *helper_targets; /* format 31 */
 	size_t n_helper_targets, cap_helper_targets;
 	struct bml_map *maps;
 	size_t n_maps, cap_maps;
@@ -175,16 +180,16 @@ struct bml_requirements {
 	size_t n_argtags, cap_argtags;
 	struct bml_tailslot *tailslots;
 	size_t n_tailslots, cap_tailslots;
-	struct bml_ctxaccess *ctxaccesses;
+	struct bml_ctxaccess *ctxaccesses; /* format 9 */
 	size_t n_ctxaccesses, cap_ctxaccesses;
-	struct bml_innermap *innermaps;
+	struct bml_innermap *innermaps; /* format 12 */
 	size_t n_innermaps, cap_innermaps;
-	struct bml_kfunc *kfuncs;
+	struct bml_kfunc *kfuncs; /* format 13, in document order */
 	size_t n_kfuncs, cap_kfuncs;
-
+	/* The initial profile of each program that has kfunc rows. Only FromELF derives them; after a plain Parse there are none (see kfunc_profile.c). */
 	struct bml_kfunc_profile_entry *kfunc_profiles;
 	size_t n_kfunc_profiles;
-
+	/* Derived by FromELF (not derived by a plain Parse). */
 	struct bml_map_fields map_fields;
 	struct bml_str *arenas, *data_kptrs;
 	size_t n_arenas, cap_arenas, n_data_kptrs, cap_data_kptrs;
@@ -204,13 +209,13 @@ struct bml_requirements {
 	size_t n_guarded_rows, cap_guarded_rows;
 };
 
-
-
+/* A Parse error (Go's requirements.ParseError). An error with an empty rule is an untyped error (Go's sc.Err(): a line longer than 64 KiB,
+ * or running out of memory); it does not appear in the shape of the corpus wants. */
 struct bml_parse_error {
-	int line;
-	const char *row;
-	const char *rule;
-	char *msg;
+	int line;       /* 1-based; the header is line 1; the end-of-document checks use 0 */
+	const char *row;  /* row kind (a static string); "" for the header, an unknown kind and document-level rules */
+	const char *rule; /* header / fields / min_version / order / value / unknown_kind / document; "" for an untyped error */
+	char *msg;        /* the same text as Go's Error() (malloc-ed) */
 };
 
 /* CONTRACT: Go's Parse. Success is 0 with *out (free with bml_requirements_free). Failure is -1 with *err (bml_parse_error_free).
@@ -219,7 +224,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 void bml_requirements_free(struct bml_requirements *r);
 void bml_parse_error_free(struct bml_parse_error *e);
 
-
+/* The table of row kinds (RowKinds in spec.go), the attach types (AttachTypes) and the BTF features (the 11 that BTFFeatureBlob knows). */
 struct bml_row_kind {
 	const char *name;
 	int fields, min_version;

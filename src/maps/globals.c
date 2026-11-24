@@ -1,3 +1,5 @@
+/* maps/globals.c — Parsed.checkGlobals (go/bindrt/mapdecl.go), which checks the "globals" part of a map declaration
+ * file (section 12 of the requirements-format specification). The ELF-and-BTF side of the check is in btf/globals.c. */
 #include "maps/internal.h"
 
 #include <stdlib.h>
@@ -7,7 +9,8 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* globalType: ^([ui])(8|16|32|64)(be)?$ — on a match, the width in bits (the signedness goes to *is_signed); 0 if it
+ * does not match. */
 static int global_type(const char *s, int *is_signed)
 {
 	if (s[0] != 'u' && s[0] != 'i')
@@ -35,7 +38,7 @@ struct gidx {
 	size_t idx;
 };
 
-static int cmp_gidx(const void *a, const void *b)
+static int cmp_gidx(const void *a, const void *b) /* name order as sort.SliceStable gives it (equal names keep their original order) */
 {
 	const struct gidx *x = a, *y = b;
 	int c = strcmp(x->d->name, y->d->name);
@@ -61,7 +64,7 @@ int md_check_globals(const void *elf, size_t elf_len, const struct bml_map_decls
 	}
 	int rc = 0;
 	struct gidx *s = calloc(d->n_globals + 1, sizeof(*s));
-	char *seen = calloc(d->n_globals + 1, 1);
+	char *seen = calloc(d->n_globals + 1, 1); /* one flag per index after sorting; seen[name] is looked up by name */
 	if (!s || !seen) {
 		rc = -1;
 		goto done;
@@ -134,7 +137,7 @@ int md_check_globals(const void *elf, size_t elf_len, const struct bml_map_decls
 		}
 	}
 	if (rc == 0 && (!d->allow_undeclared_globals || BML_MUT("maps.globals_always_bidirectional"))) {
-		for (size_t k = 0; k < neg && rc == 0; k++) {
+		for (size_t k = 0; k < neg && rc == 0; k++) { /* eg is in ascending name order */
 			int found = 0;
 			for (size_t i = 0; i < d->n_globals; i++)
 				if (seen[i] && !strcmp(s[i].d->name, eg[k].name))

@@ -1,3 +1,7 @@
+/* abi/netkit.c — the netkit attach. The direction is the expected attach type that libbpf decided
+ * from the ELF section (netkit/primary or netkit/peer). ifname is the **primary device** for a primary
+ * and for a peer program alike, named inside the caller's netns. The check after the attach is in
+ * abi/netkit_finish.c. */
 #define _GNU_SOURCE
 #include "abi/netkit.h"
 

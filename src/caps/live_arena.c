@@ -1,3 +1,5 @@
+/* Two finite load-only arena recipes, one for syscall programs and one for sleepable programs.
+ * They only load a program: they never mmap, run or attach anything. */
 #define _GNU_SOURCE
 #include "caps/live_arena.h"
 #include "caps/live_internal.h"
@@ -33,7 +35,7 @@ static int dependency(struct bml_live *l,const char *name,const char *ret,const 
 	return BML_Q_OK;
 }
 
-
+/* Same named-denial rule as the existing five recipes: mixed callee denials are Unknown. */
 static int classify(const char *name,struct lv_res *r,char **msg)
 {
 	char want[128];snprintf(want,sizeof want,"calling kernel function %s is not allowed",name);
@@ -44,7 +46,7 @@ static int classify(const char *name,struct lv_res *r,char **msg)
 		if(n==strlen(want) && !memcmp(s,want,n))named=1;
 		else if(memmem(s,n,"calling kernel function ",24) && memmem(s,n," is not allowed",15))other=1;
 	}
-	if(named && !other)return BML_Q_OK;
+	if(named && !other)return BML_Q_OK; /* caller initialized *out=false */
 	char *detail=lv_res_text(r);
 	int st=lv_unknownf(msg,"arena kfunc load does not establish named permission denial: %s",detail?detail:"");
 	free(detail);return st;
@@ -59,7 +61,7 @@ int lv_arena_kfunc_load(struct bml_live *l,const struct bml_kfunc_profile *p,con
 	const struct bml_str *args,size_t n,int *out,char **msg)
 {
 	*out=0;*msg=NULL;
-
+	/* initial_spec has checked every canonical field before this private route. */
 	if(strcmp(p->kind,"syscall"))return lv_unknownf(msg,"arena recipe needs original syscall context");
 	int alloc=!strcmp(name,"bpf_arena_alloc_pages");
 	static const char *const spell[]={"ptr:void","ptr:void","u32","i32","u64"};
@@ -73,7 +75,7 @@ int lv_arena_kfunc_load(struct bml_live *l,const struct bml_kfunc_profile *p,con
 	int mfd=lv_bpf(BPF_MAP_CREATE,&a,sizeof a);
 	if(mfd<0){char *why=bml_go_errno_str(-mfd);st=lv_unknownf(msg,"arena recipe map create: %s",why?why:"");free(why);return st;}
 	uint8_t instructions[9][8];memset(instructions,0,sizeof instructions);size_t count=0;
-	insn(instructions[count++],0x18,0x11,mfd);count++;
+	insn(instructions[count++],0x18,0x11,mfd);count++; /* pseudo map FD + high32=0 */
 	insn(instructions[count++],0xb7,2,0);insn(instructions[count++],0xb7,3,1);
 	if(alloc){insn(instructions[count++],0xb7,4,-1);insn(instructions[count++],0xb7,5,0);}
 	insn(instructions[count++],0x85,0x20,(int32_t)id);

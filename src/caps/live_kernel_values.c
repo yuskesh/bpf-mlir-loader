@@ -1,3 +1,4 @@
+/* Enum values and func_ret (from the vmlinux BTF alone; nothing is loaded). */
 #include "caps/live_internal.h"
 
 #include <errno.h>

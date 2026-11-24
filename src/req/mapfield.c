@@ -1,3 +1,9 @@
+/* mapfield.c — a port of Go's deriveMapFields, MapFieldUses, scanFuncs, recordMapRef and mapValueFields.
+ *
+ * Go map overwrites (the later write to the same key wins) are reproduced by searching from the back. This applies to byStart (FUNCs with the
+ * same section and offset), to the relocation tables (for the same instruction offset and the same target section, a later REL section
+ * replaces the whole table), and to the names of the VARs in .maps. Relocation entries and .BTF are always read as little endian, as in Go,
+ * whatever the endianness of the ELF file. */
 #include "req/mapfield.h"
 
 #include <stdarg.h>
@@ -27,7 +33,7 @@ struct fn {
 
 struct rel {
 	uint64_t off;
-	size_t sym;
+	size_t sym; /* index into syms */
 };
 
 struct relmap {
@@ -42,7 +48,7 @@ struct scan {
 	size_t n_syms;
 	struct fn *fns;
 	size_t n_fns;
-	struct relmap *relocs;
+	struct relmap *relocs; /* one per section index */
 };
 
 static char *fmt(const char *f, ...) __attribute__((format(printf, 1, 2)));
@@ -112,7 +118,7 @@ static int sym_in_section(const struct scan *s, const struct bml_elf_sym *y)
 	return y->shndx < s->elf->n_sections && y->shndx != BML_SHN_UNDEF;
 }
 
-
+/* recordMapRef */
 static int record_map_ref(struct scan *s, struct fn *x, uint64_t at, uint8_t regs, const uint8_t *immb)
 {
 	const struct bml_elf_sym *y = reloc_at(s, x->sec, at);
@@ -139,7 +145,7 @@ static int record_map_ref(struct scan *s, struct fn *x, uint64_t at, uint8_t reg
 	return 0;
 }
 
-
+/* scanFuncs. A failure is reported in *err. */
 static int scan_funcs(struct scan *s, char **err)
 {
 	const struct bml_elf *e = s->elf;
@@ -155,7 +161,7 @@ static int scan_funcs(struct scan *s, char **err)
 		size_t cap = s->n_fns;
 		if (push((void **)&s->fns, &s->n_fns, &cap, sizeof(x), &x))
 			return (*err = fmt("out of memory"), -1);
-
+		/* cap is recomputed from n each time to match the doubling inside push: this costs more reallocs but is correct */
 	}
 	s->relocs = calloc(e->n_sections ? e->n_sections : 1, sizeof(*s->relocs));
 	if (!s->relocs)
@@ -221,13 +227,13 @@ static int scan_funcs(struct scan *s, char **err)
 				continue;
 			int64_t imm = (int32_t)le32(code + i + 4);
 			switch (regs >> 4) {
-			case 0:
+			case 0: /* helper: MapFields does not use it */
 				break;
 			case 1: {
 				uint64_t at = x->start + i;
 				struct loc to;
 				const struct bml_elf_sym *y = reloc_at(s, x->sec, at);
-
+				/* A kfunc call (the relocation names an undefined symbol, which the loader resolves to an id in the kernel BTF): it is neither an edge nor an error. */
 				if (y && y->shndx == BML_SHN_UNDEF)
 					break;
 				if (y)
@@ -253,7 +259,7 @@ static int cmpstr(const void *a, const void *b)
 	return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
-
+/* ---- MapFieldUses ---- */
 
 static int uses(const struct bml_elf *e, struct bml_map_fields *out, char **err)
 {
@@ -263,7 +269,7 @@ static int uses(const struct bml_elf *e, struct bml_map_fields *out, char **err)
 	size_t n_needed = 0, cap_needed = 0;
 	struct mapfields *fields = NULL;
 	size_t n_fields = 0;
-
+	/* used: the map names per FUNC name (FUNCs with the same name are merged, like Go's append to used[x.name]) */
 	struct usedp {
 		const char *name;
 		const char **maps;
@@ -284,7 +290,7 @@ static int uses(const struct bml_elf *e, struct bml_map_fields *out, char **err)
 	}
 	for (size_t ri = 0; ri < s.n_fns; ri++) {
 		memset(visited, 0, s.n_fns);
-
+		/* the set of maps of the reachable functions (duplicate names removed) */
 		const char **set = NULL;
 		size_t n_set = 0, cap_set = 0;
 		size_t sp = 0;
@@ -342,7 +348,7 @@ static int uses(const struct bml_elf *e, struct bml_map_fields *out, char **err)
 		}
 		free(set);
 	}
-
+	/* needed is in byte order (like Go's sort.Strings), so that the first map that cannot be read is named deterministically */
 	if (n_needed)
 		qsort(needed, n_needed, sizeof *needed, cmp_cstr);
 	if (n_needed && btf_map_value_fields(e, needed, n_needed, &fields, &n_fields, err))

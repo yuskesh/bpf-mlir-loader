@@ -1,3 +1,4 @@
+/* btf/map_values.c — a copy of Go's mapValueFields. Split out of mapfield.c; see the comment in btf/map_values.h. */
 #include "btf/map_values.h"
 
 #include <stdarg.h>
@@ -38,7 +39,7 @@ static uint32_t le32(const uint8_t *p)
 {
 	return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
-
+/* ---- minimal reading of .BTF (mapValueFields) ---- */
 
 struct mft {
 	uint32_t kind, type_id;
@@ -86,7 +87,7 @@ static int btf_read(const uint8_t *raw, size_t len, struct btfr *b, char **err)
 	const uint8_t *strs = raw + hdr + soff;
 	size_t slen = (size_t)sl;
 	size_t cap = 1;
-	b->t = calloc(1, sizeof(*b->t));
+	b->t = calloc(1, sizeof(*b->t)); /* type 0 */
 	if (!b->t)
 		return (*err = fmt("out of memory"), -1);
 	b->t[0].name = "";
@@ -176,7 +177,7 @@ static int cmpstr(const void *a, const void *b)
 	return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
-
+/* mapValueFields: the fields of each needed map (in name order) */
 int btf_map_value_fields(const struct bml_elf *e, const char **needed, size_t n_needed, struct mapfields **out,
 			    size_t *n_out, char **err)
 {
@@ -208,7 +209,7 @@ int btf_map_value_fields(const struct bml_elf *e, const char **needed, size_t n_
 				done_already = 1;
 		if (done_already)
 			continue;
-
+		/* vars[m]: the VAR in the .maps DATASEC (the last one wins). Go through every DATASEC in order; an error from get is an error. */
 		int found = 0;
 		uint32_t def_id = 0;
 		for (size_t ti = 0; ti < b.n; ti++) {

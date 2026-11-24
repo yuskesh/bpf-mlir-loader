@@ -1,3 +1,11 @@
+/* caps/live_v11.c — the live probes of policy version 9 (requirements format version 11), a C port of kernel/internal/kload/v11.go and
+ * the tp part of attachctx.go: the fields of a tracefs event format (ParseTracepointFormat, CompareTracepointField and
+ * CheckTracepointField) and the attach target kind tp (whether the tracefs id exists). A struct_ops member needs only the vmlinux BTF
+ * (live_btf_func.c), and the replacement target of ext is in live_ext.c.
+ *
+ * tracefs cannot be read without root (on 7.1.8 /sys/kernel/tracing has mode 700). An event that cannot be read or does not exist is
+ * Unknown, which stops the load; a non-root loader uses caps recorded as root. The Unknown sentences are also byte for byte the same as
+ * Go's (the differential test of the live caps compares them). */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
 
@@ -12,11 +20,11 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-#define UNK ": cannot be determined on this target"
+#define UNK ": cannot be determined on this target" /* the ErrUnknown sentence (the %w of unknownf) */
 
 const char *lv_tracefs_roots[2] = {"/sys/kernel/tracing", "/sys/kernel/debug/tracing"};
 
-
+/* `<cat>/<event>`: cat and event are non-empty, event has no /, and there is no "..". Returns 0 if valid (*cat and *name are malloc'd) and -1 with an Unknown *msg otherwise. */
 static int split_event(const char *event, char **cat, char **name, char **msg)
 {
 	const char *sl = strchr(event, '/');
@@ -39,7 +47,7 @@ static int split_event(const char *event, char **cat, char **name, char **msg)
 	return 0;
 }
 
-
+/* Append the error sentence of Go's os.Stat / os.ReadFile ("<op> <path>: <errno>") to errs, separated by "; " */
 static void add_path_err(struct bml_buf *errs, const char *op, const char *path, int e)
 {
 	char *es = bml_go_errno_str(e);
@@ -84,7 +92,7 @@ static int is_space(char c)
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
 }
 
-
+/* the range of strings.TrimSpace */
 static void trim(const char **s, size_t *n)
 {
 	while (*n && is_space(**s))
@@ -94,19 +102,19 @@ static void trim(const char **s, size_t *n)
 }
 
 struct tp_fmt_field {
-	char *name, *decl;
+	char *name, *decl; /* decl is the TrimSpace of the declaration (the evidence for the strptr and strarray types) */
 	int64_t offset, size;
 	int is_signed;
 };
 
-
+/* One field line (already trimmed, starting with "field:"). Returns 0 if valid and -1 on error (*err holds Go's sentence). */
 static int parse_field_line(const char *l, size_t n, struct tp_fmt_field *f, char **err)
 {
 	const char *decl = "";
 	size_t decl_n = 0;
 	int got = 0;
 	memset(f, 0, sizeof *f);
-	for (size_t i = 0; i <= n;) {
+	for (size_t i = 0; i <= n;) { /* strings.Split(l, ";") */
 		size_t j = i;
 		while (j < n && l[j] != ';')
 			j++;
@@ -132,7 +140,7 @@ static int parse_field_line(const char *l, size_t n, struct tp_fmt_field *f, cha
 				}
 				if (part[0] == 'o')
 					f->offset = x;
-				else if (kn == 4)
+				else if (kn == 4) /* size (signed also has i as its second letter, so they are told apart by length; the live differential test found this bug) */
 					f->size = x;
 				else
 					f->is_signed = x != 0;
@@ -141,7 +149,7 @@ static int parse_field_line(const char *l, size_t n, struct tp_fmt_field *f, cha
 		}
 		i = j + 1;
 	}
-
+	/* the name is tpFieldName (the last identifier of the declaration; a trailing [N] is skipped) */
 	size_t s, e;
 	if (!lv_tp_field_name(decl, decl_n, &s, &e) || got != 3) {
 		struct bml_buf b = {0};
@@ -163,7 +171,7 @@ static int parse_field_line(const char *l, size_t n, struct tp_fmt_field *f, cha
 	return 0;
 }
 
-
+/* the strptr / strarray branch of CompareTracepointField */
 static int compare_str(const struct tp_fmt_field *f, const char *event, const char *field, int64_t off, int64_t bytes, const char *sign,
 		       struct bml_strs *out)
 {
@@ -179,7 +187,7 @@ static int compare_str(const struct tp_fmt_field *f, const char *event, const ch
 	return lv_push(out, &b) ? -2 : 0;
 }
 
-
+/* the branch of CompareTracepointField for byte arrays [N]u8 / [N]i8 */
 static int compare_array(const struct tp_fmt_field *f, const char *event, const char *field, int64_t off, int64_t bytes, const char *sign,
 			 struct bml_strs *out)
 {
@@ -191,7 +199,7 @@ static int compare_array(const struct tp_fmt_field *f, const char *event, const 
 	snprintf(spell, sizeof spell, "[%lld]%c8", (long long)cnt, want);
 	int ok = known && cnt == bytes && f->size == bytes && f->offset == off && got == want && (!explicit || explicit == got) && !strcmp(sign, spell);
 	if (BML_MUT("caps.tp_array_shape_any"))
-		ok = f->offset == off;
+		ok = f->offset == off; /* mutation: do not look at the shape, size or sign (a control for the tests; only the offset is compared) */
 	if (ok)
 		return 0;
 	struct bml_buf b = {0};
@@ -202,8 +210,9 @@ static int compare_array(const struct tp_fmt_field *f, const char *event, const 
 	return lv_push(out, &b) ? -2 : 0;
 }
 
-
-
+/* ParseTracepointFormat and CompareTracepointField. Returns 0 if compared (out), -1 for a format error (*err), -2 for out of memory, and
+ * -3 if for strptr / strarray the declaration of a field of the same name cannot be read (*err; the Unknown of CheckTracepointField:
+ * the comparison uses the first such field, while Unknown considers every field of that name). */
 static int compare_format(const char *text, size_t len, const char *event, const char *field, int64_t off, int64_t bytes, const char *sign,
 			  struct bml_strs *out, char **err)
 {

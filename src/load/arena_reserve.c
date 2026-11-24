@@ -1,3 +1,4 @@
+/* Acquire an unused address interval without replacing any mapping. */
 #define _GNU_SOURCE
 #include "load/arena_reserve.h"
 #include <errno.h>
@@ -22,7 +23,7 @@ int lb_arena_reserve(struct lb_arena_reservation *r, uint64_t address, uint64_t 
 	void *want=(void *)(uintptr_t)address;
 	void *p=mmap(want,(size_t)length,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
 	if(p==MAP_FAILED) return fail(err,"reservation failed (address must be unused)",errno);
-
+	/* Older kernels can ignore NOREPLACE. Never accept a relocated reservation. */
 	if(p!=want) {
 		int rc=munmap(p,(size_t)length);
 		return fail(err,rc?"unexpected reservation cleanup failed":"reservation address changed",rc?errno:EINVAL);

@@ -1,3 +1,10 @@
+// test/corpus/parse_case.c — reads a parse case of the conformance corpus (requirements.txt) with bml_req_parse and prints one
+// line of JSON in the same form as want.json (the Go reference's wantParse in go/bindrt/conformance_test.go, with omitempty).
+//
+//   parse_case <requirements.txt>
+//
+// rc: 0 means a verdict was printed (whether accepted or rejected); 2 means an untyped error (a failure in the Go harness too)
+// or an I/O error.
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +44,7 @@ static void hex(const char *s)
 		printf("%02x", *p);
 }
 
-
+/* -m: several files, in the same form as test/oracle's parse-oracle ("<path>\t<json>", including the hex of the rejection text) */
 static int multi(int argc, char **argv)
 {
 	for (int i = 2; i < argc; i++) {

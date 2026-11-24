@@ -1,3 +1,8 @@
+/* req_parse.c — a port of requirements.Parse (bpf-mlir's go/requirements/requirements.go, lines 120-388).
+ *
+ * The order of the branches, the rules and the error texts are kept as in Go. Lines are split like bufio.Scanner's ScanLines (one trailing \r
+ * is removed, and the scan stops at a line of 64 KiB or more), fields like strings.Split(line, "\t"), and numbers are decimal as in strconv
+ * (see gostr.c). */
 #include "req/parse_internal.h"
 
 #include <stdarg.h>
@@ -36,8 +41,8 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 	if (!fields)
 		OOM();
 	int n = 1;
-	long last_map = -1;
-	int last_attach = 0;
+	long last_map = -1; /* if the previous row was a map row, its index (the position of an innermap row) */
+	int last_attach = 0; /* whether the physically preceding row is an attach row (needed before the field-count check; Go's lastPhysicalRow) */
 	while (req_scan(&sc)) {
 		n++;
 		struct field line = sc.tok;
@@ -66,7 +71,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 		size_t want = 4;
 		if (rk && !(req_eq(f[0], "map") && r->version < 2))
 			want = (size_t)rk->fields;
-		if (rk && req_eq(f[0], "kfunc") && nf >= want && nf <= 9)
+		if (rk && req_eq(f[0], "kfunc") && nf >= want && nf <= 9) /* RowMaxFields: a kfunc row has 4 to 9 fields */
 			want = nf;
 		if (nf != want) {
 			if (!rk)
@@ -91,7 +96,8 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 				     (int64_t)rk->min_version);
 			goto fail;
 		}
-
+		/* Format 12: the pending check before a row (a multi program missing mtarget rows, an of_maps map missing its innermap) and the format-12 rows
+		 * (parse_v12.c). */
 		long after_map = last_map;
 		last_map = -1;
 		if (req_v12_pending(r, n, row, after_map, e))
@@ -107,13 +113,13 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			if (rc) goto fail;
 			continue;
 		}
-		if (req_eq(f[0], "helper_target") || req_eq(f[0], "sleepable")) {
+		if (req_eq(f[0], "helper_target") || req_eq(f[0], "sleepable")) { /* in parse_target_rows.c */
 			int rc = req_parse_target_row(r, f, line, n, after_attach, e);
 			if (rc == -2) OOM();
 			if (rc) goto fail;
 			continue;
 		}
-		if (req_eq(f[0], "sysarg") || req_eq(f[0], "mtargetarg") || req_eq(f[0], "kfunc") || req_eq(f[0], "tpbuf")) {
+		if (req_eq(f[0], "sysarg") || req_eq(f[0], "mtargetarg") || req_eq(f[0], "kfunc") || req_eq(f[0], "tpbuf")) { /* in parse_v13.c (and tpbuf in parse_v14.c) */
 			int rc = req_eq(f[0], "tpbuf")	 ? req_v14_tpbuf(r, f, line, n, after_attach, e)
 				 : req_eq(f[0], "kfunc") ? req_v13_kfunc(r, f, nf, line, n, e)
 							 : req_v13_companion(r, f, line, n, e);
@@ -149,7 +155,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 				req_perr(e, n, row, "value", "%s line %d: unknown BTF feature %q", SEC, (int64_t)n, Q(f[1]));
 				goto fail;
 			}
-			int mv = req_btf_feature_min_version(f[1]);
+			int mv = req_btf_feature_min_version(f[1]); /* type_tag exists from format 13 on */
 			if (r->version < mv && !BML_MUT("parse.v13_rows_any_version")) {
 				req_perr(e, n, row, "min_version", "%s line %d: BTF feature %q needs version %d", SEC, (int64_t)n, Q(f[1]), (int64_t)mv);
 				goto fail;
@@ -219,7 +225,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			r->n_argtags++;
 			continue;
 		}
-
+		/* Format 11: the only companion row of trace_perf is arch (one). */
 		if (req_eq(f[0], "arch") && r->n_attaches && req_str_eq_lit(&r->attaches[r->n_attaches - 1].attach_type, "trace_perf")) {
 			struct bml_attach *a = &r->attaches[r->n_attaches - 1];
 			if (!req_str_eq(&a->program, f[1]) || a->arch.len != 0) {
@@ -234,7 +240,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 				OOM();
 			continue;
 		}
-		if (req_eq(f[0], "tpfield") || req_eq(f[0], "extret") || req_eq(f[0], "extarg") || req_eq(f[0], "structop")) {
+		if (req_eq(f[0], "tpfield") || req_eq(f[0], "extret") || req_eq(f[0], "extarg") || req_eq(f[0], "structop")) { /* in parse_v11.c */
 			int rc = req_v11_companion(r, f, line, n, e);
 			if (rc == -2)
 				OOM();
@@ -243,7 +249,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			continue;
 		}
 		if (req_eq(f[0], "arch") || req_eq(f[0], "ctxfield") || req_eq(f[0], "kprobearg") || req_eq(f[0], "binary") ||
-		    req_eq(f[0], "uprobearg")) {
+		    req_eq(f[0], "uprobearg")) { /* companion rows of the probe families, in parse_probe.c */
 			int rc = req_probe_companion(r, f, line, n, row, e);
 			if (rc == -2)
 				OOM();
@@ -264,7 +270,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 		}
 		if (req_eq(f[0], "retsig")) {
 			struct bml_attach *a = r->n_attaches ? &r->attaches[r->n_attaches - 1] : NULL;
-
+			/* Format 10: trace_fmod_ret too (it rewrites the return value). Format 11: trace_struct_ops comes after structop and before farg, and void is allowed too. */
 			int sops = a && req_str_eq_lit(&a->attach_type, "trace_struct_ops");
 			if (!a || !req_str_eq(&a->program, f[1]) ||
 			    (!req_str_eq_lit(&a->attach_type, "trace_fexit") && !req_str_eq_lit(&a->attach_type, "trace_fmod_ret") && !sops) ||
@@ -289,7 +295,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 				req_perr(e, n, row, "order", "%s line %d: %s for unknown program %q", SEC, (int64_t)n, row, Q(f[1]));
 				goto fail;
 			}
-			if (req_eq(f[0], "attach")) {
+			if (req_eq(f[0], "attach")) { /* the families with companion rows and the generic attach rows (parse_v9.c) */
 				int rc = req_v9_attach(r, f, line, n, e);
 				if (rc == -2)
 					OOM();
@@ -317,14 +323,14 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			a->n_args++;
 			continue;
 		}
-		if (req_eq(f[0], "farg")) {
+		if (req_eq(f[0], "farg")) { /* since v0.17.0: tied by position to the preceding trace_fentry attach (checked in the order: sequence, value, consecutive indices) */
 			struct bml_attach *a = r->n_attaches ? &r->attaches[r->n_attaches - 1] : NULL;
 			int64_t idx;
 			int aerr = bml_go_atoi(f[2].p, f[2].n, &idx);
-
+			/* Format 10: the farg of trace_fmod_ret comes after retsig, and its value is an integer spelling or - */
 			int fmod = a && req_str_eq_lit(&a->attach_type, "trace_fmod_ret");
-
-
+			/* Format 11: the farg of trace_lsm is a struct, an integer or -; the farg of trace_struct_ops has the same domain and comes after structop (and retsig) */
+			/* Format 13: trace_lsm_cgroup behaves like trace_lsm */
 			int lsm = a && (req_str_eq_lit(&a->attach_type, "trace_lsm") || req_str_eq_lit(&a->attach_type, "trace_lsm_cgroup")),
 			    sops = a && req_str_eq_lit(&a->attach_type, "trace_struct_ops");
 			if (!a || !req_str_eq(&a->program, f[1]) || !(req_str_eq_lit(&a->attach_type, "trace_fentry") || fmod || lsm || sops) ||
@@ -353,7 +359,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			a->n_fargs++;
 			continue;
 		}
-		if (req_eq(f[0], "ctxaccess")) {
+		if (req_eq(f[0], "ctxaccess")) { /* format 9, in parse_v9.c */
 			int rc = req_v9_ctxaccess(r, f, line, n, e);
 			if (rc == -2)
 				OOM();
@@ -362,14 +368,14 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			continue;
 		}
 		if (req_eq(f[0], "kfield")) {
-			if (req_kfield_path_row(r, f, n, row, e))
+			if (req_kfield_path_row(r, f, n, row, e)) /* paths and struct:T exist from format 17 on (checked before the program check) */
 				goto fail;
 			if (req_find_program(r, f[1]) < 0) {
 				req_perr(e, n, row, "order", "%s line %d: kfield for unknown program %q", SEC, (int64_t)n, Q(f[1]));
 				goto fail;
 			}
-			int strptr = req_eq(f[4], "strptr");
-			if (!req_kfield_type_ok(f[4]) && !strptr && !req_kfield_struct_type(f[4])) {
+			int strptr = req_eq(f[4], "strptr"); /* a char * field; minimum format 15 */
+			if (!req_kfield_type_ok(f[4]) && !strptr && !req_kfield_struct_type(f[4])) { /* the kfield types: integer widths, pointer chase and char arrays (v0.17.0), and struct:T */
 				req_perr(e, n, row, "value",
 					 "%s line %d: kfield type must be i8, u8, i16, u16, i32, u32, i64, u64, ptr:<struct>, ptr:void, [N]i8 / [N]u8 (N 1..64), strptr or enum:<8|16|32|64>, got %q",
 					 SEC, (int64_t)n, Q(f[4]));
@@ -394,7 +400,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 			if (req_note_guarded_row(r, n, -1, (long)r->n_kfields - 1)) OOM();
 			continue;
 		}
-
+		/* program, helper and map (Go parses the integer with ParseInt before its switch) */
 		int64_t id;
 		if (bml_go_parse_int(f[3].p, f[3].n, 64, &id)) {
 			req_perr(e, n, row, "value", "%s line %d: bad number %q", SEC, (int64_t)n, Q(f[3]));
@@ -456,7 +462,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 		     (int64_t)want, Q(line));
 		goto fail;
 	}
-	if (req_v12_pending(r, 0, "", last_map, e))
+	if (req_v12_pending(r, 0, "", last_map, e)) /* the end of the document (line 0) */
 		goto fail;
 	if (req_check_arena_rows(r, e)) goto fail;
 	if (r->n_programs == 0) {
@@ -467,7 +473,7 @@ int bml_req_parse(const char *data, size_t len, struct bml_requirements **out, s
 		req_perr(e, 0, "", "document", "%s: version %d without a schema row", SEC, (int64_t)r->version);
 		goto fail;
 	}
-	if (req_kfield_prefixes(r, e))
+	if (req_kfield_prefixes(r, e)) /* checkKFieldPrefixes */
 		goto fail;
 	int guards_rc = req_check_guard_bindings(r, e);
 	if (guards_rc == -2) OOM();

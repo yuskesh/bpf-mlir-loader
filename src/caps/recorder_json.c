@@ -1,3 +1,5 @@
+/* caps/recorder_json.c — writing caps.json with the bytes of Go's json.MarshalIndent(v, "", "  "): HTML escaping is enabled, map keys are in
+ * byte order, and the three basic queries are always written. It was split out of recorder.c. */
 #define _GNU_SOURCE
 #include "caps/recorder_internal.h"
 
@@ -11,7 +13,7 @@
 
 static void jstr(struct bml_buf *b, const char *s)
 {
-
+	/* escape < > & after writing with SetEscapeHTML(false) (the escapes already written contain only hexadecimal digits, so these three never appear in them) */
 	struct bml_buf t = {0};
 	bml_json_write_string(&t, s, strlen(s));
 	if (t.oom)
@@ -73,7 +75,7 @@ static void answer(struct bml_buf *b, const struct rec *e, int d)
 {
 	static const char *const field[] = {"value", "unknown", "error", "diffs", "text", "file"};
 	if ((e->kind == A_UNKNOWN || e->kind == A_ERROR || e->kind == A_FILE) && !e->s[0]) {
-		bml_buf_adds(b, "{}");
+		bml_buf_adds(b, "{}"); /* an omitempty string */
 		return;
 	}
 	bml_buf_adds(b, "{");
@@ -125,7 +127,7 @@ char *bml_recorder_json(const struct bml_recorder *r, long long uid, const char 
 	bml_buf_addf(&b, ",\n    \"uprobe_reopens_path\": %s,\n    \"core_poisons_missing_field\": %s,\n    \"btf_rewrite\": ",
 		     l->uprobe_reopens_path ? "true" : "false", l->core_poisons_missing_field ? "true" : "false");
 	kv_map(&b, l->btf_rewrite, l->n_btf_rewrite, l->has_btf_rewrite, 2);
-
+	/* omitempty, in the order of LoaderJSON */
 	const char *const lkeys[] = {"usdt_attach", "sockmap_attach", "lsm_cgroup_load", "fsession_load", "ksyscall_attach",
 		"hidden_data_vars", "typed_ksym", "kconfig", "arena_cast", "arena_premmap"};
 	const char *const lvals[] = {l->usdt_attach, l->sockmap_attach, l->lsm_cgroup_load, l->fsession_load, l->ksyscall_attach,
@@ -136,7 +138,7 @@ char *bml_recorder_json(const struct bml_recorder *r, long long uid, const char 
 			jstr(&b, lvals[i]);
 		}
 	bml_buf_adds(&b, "\n  },\n  \"queries\": {");
-
+	/* the query names (the three basic ones always) in byte order */
 	const char *names[64];
 	size_t nn = 0;
 	const char *base[] = {BML_QUERY_PROG_TYPE, BML_QUERY_HELPER, BML_QUERY_MAP_TYPE};
@@ -155,7 +157,7 @@ char *bml_recorder_json(const struct bml_recorder *r, long long uid, const char 
 		bml_buf_free(&b);
 		return NULL;
 	}
-
+	/* ebpf-caps recording format 6: queries holds the queries that do not depend on privilege and privileged_queries those that do (not written if empty, as omitempty) */
 	for (int dep = 0; dep < 2; dep++) {
 		size_t ng = 0;
 		for (size_t i = 0; i < nn; i++)
@@ -165,7 +167,7 @@ char *bml_recorder_json(const struct bml_recorder *r, long long uid, const char 
 				break;
 			bml_buf_adds(&b, ",\n  \"privileged_queries\": {");
 		}
-		if (!ng)
+		if (!ng) /* Go's empty map */
 			bml_buf_adds(&b, "}");
 		for (size_t i = 0, k = 0; i < nn; i++) {
 			if (bml_caps_privilege_dependent(names[i]) != dep)

@@ -1,10 +1,13 @@
+/* req/kfield_path.c — embedded kfield paths a.b / a.b.c and the type struct:T (format 17; a port of kfield_path.go and of the kfield branch of Parse
+ * in bpf-mlir's go/requirements). Every intermediate prefix needs a `struct:T` row of the same program and the same struct (checked by the document
+ * check at the end of parse). */
 #include "req/parse_internal.h"
 
 #include <string.h>
 
 #include "util/mutation.h"
 
-
+/* validKFieldIdentifier: [A-Za-z_][A-Za-z0-9_]* */
 static int ident(const char *p, size_t n)
 {
 	if (n == 0)
@@ -17,7 +20,7 @@ static int ident(const char *p, size_t n)
 	return 1;
 }
 
-
+/* validKFieldPath: strings.Split(s, ".") gives at most 3 parts and each part is an identifier */
 int req_valid_kfield_path(const char *p, size_t n)
 {
 	int segs = 1;
@@ -41,7 +44,8 @@ int req_kfield_struct_type(struct field t)
 	return t.n >= 7 && !memcmp(t.p, "struct:", 7);
 }
 
-
+/* The format version and spelling of a path row or struct:T row (before the check of the program name, as in Go). Returns 0 for good and -1
+ * for an error (stored in e). */
 int req_kfield_path_row(const struct bml_requirements *r, struct field *f, int n, const char *row, struct bml_parse_error *e)
 {
 	int st = req_kfield_struct_type(f[4]);
@@ -59,7 +63,8 @@ static int is_struct(const struct bml_kfield *k)
 	return !strncmp(k->type.p, "struct:", 7);
 }
 
-
+/* prefixes[{program, struct, field}]: the first type among the struct rows with the same key. A conflict stops before Go's map overwrite could matter,
+ * so using the first type gives the same result. */
 static const struct bml_kfield *prefix_of(const struct bml_requirements *r, const struct bml_kfield *k, const char *f, size_t fn)
 {
 	for (size_t i = 0; i < r->n_kfields; i++) {
@@ -71,7 +76,7 @@ static const struct bml_kfield *prefix_of(const struct bml_requirements *r, cons
 	return NULL;
 }
 
-
+/* checkKFieldPrefixes (at the end of parse: line number 0, row kfield, rule document). Returns 0 for good and -1 for an error. */
 int req_kfield_prefixes(const struct bml_requirements *r, struct bml_parse_error *e)
 {
 	if (BML_MUT("parse.kfield_no_prefix_check"))

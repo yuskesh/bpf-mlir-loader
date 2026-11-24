@@ -1,9 +1,11 @@
+/* Type reading for the btfexact rows and for kload's enumval.go and ksymvar.go. A module that has a base is
+ * enumerated only from its first id. */
 #include "btf/kernel_values.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-
+/* The existing idx is in essential-key order. Check that whole range, and do not rely on cilium's quirk of Delete plus index advance. */
 static size_t key_len(const char *s)
 {
 	const char *last = NULL;

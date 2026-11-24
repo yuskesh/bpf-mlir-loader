@@ -1,3 +1,5 @@
+/* kload/fibflags.go: asks for the mask of XDP's fib_lookup with a load followed by a TEST_RUN.
+ * It is not called in the non-root stage of the experiment that added it (a one-time scope, not a general rule). The cache keeps both known and Unknown answers. */
 #include "caps/live_internal.h"
 
 #include <errno.h>

@@ -1,3 +1,5 @@
+/* btf/kernel_name.c — the name index of the kernel's BTF and Spec.TypeByName: a copy of namedTypes in newDecoder,
+ * TypesByName, AnyTypesByName and TypeByName of cilium/ebpf v0.22. Split out of kernel.c. */
 #define _GNU_SOURCE
 #include "util/mutation.h"
 #include "btf/kernel.h"
@@ -7,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-
+/* Type.TypeName: only for Go types that have a name (Pointer, Array, qualifiers, FuncProto, declTag and TypeTag give "") */
 const char *bml_kbtf_type_name(const struct kbtf_type *t)
 {
 	switch (t->kind) {
@@ -18,7 +20,7 @@ const char *bml_kbtf_type_name(const struct kbtf_type *t)
 	return "";
 }
 
-
+/* the position of the last "___" (-1 if there is none) */
 static long last_flavor(const char *s)
 {
 	long at = -1;
@@ -27,21 +29,21 @@ static long last_flavor(const char *s)
 	return at;
 }
 
-
+/* the length of newEssentialName (up to the last "___" if that is after position 0) */
 static size_t essential_len(const char *s)
 {
 	long at = last_flavor(s);
 	return at > 0 ? (size_t)at : strlen(s);
 }
 
-
+/* the index key (cilium's newDecoder: if the name contains "___", the part before the last "___"; empty if that is at position 0) */
 static size_t key_len(const char *s)
 {
 	long at = last_flavor(s);
 	return at >= 0 ? (size_t)at : strlen(s);
 }
 
-
+/* compare the key of an id with (s, n) (byte order; the shorter one comes first) */
 static int key_cmp(const struct bml_kbtf *kb, uint32_t id, const char *s, size_t n)
 {
 	struct kbtf_type t;
@@ -53,7 +55,7 @@ static int key_cmp(const struct bml_kbtf *kb, uint32_t id, const char *s, size_t
 	return kl < n ? -1 : kl > n;
 }
 
-#ifdef BML_TEST_CAPS
+#ifdef BML_TEST_CAPS /* the earlier index comparison, used only by the reference in test builds */
 static int idx_cmp(const void *a, const void *b, void *ctx)
 {
 	const struct bml_kbtf *kb = ctx;
@@ -65,8 +67,9 @@ static int idx_cmp(const void *a, const void *b, void *ctx)
 }
 #endif
 
-
-
+/* Compute (name, key length, id) once before sorting. The order is the same total order as idx_cmp (compare the key
+ * bytes, the shorter first, then by id). Earlier, every comparison decoded two types and scanned for "___", which
+ * took about 14 ms on the host measured. */
 struct idx_key {
 	const char *name;
 	size_t len;
@@ -109,7 +112,7 @@ int bml_kbtf_build_index(struct bml_kbtf *kb, char **err)
 }
 
 #ifdef BML_TEST_CAPS
-
+/* Test builds only: the earlier index (a qsort_r that decodes on every comparison); test/btf/kbtf_index.c compares it byte for byte with the new index */
 int bml_kbtf_build_index_reference(struct bml_kbtf *kb, char **err)
 {
 	kb->idx = malloc((size_t)kb->n * sizeof *kb->idx);
@@ -148,10 +151,10 @@ int bml_kbtf_any_by_name(const struct bml_kbtf *kb, const char *name, uint32_t *
 	*err = NULL;
 	*ids = NULL, *n = 0;
 	size_t elen = essential_len(name);
-
+	/* TypesByName: take the types whose index key (the part before the last "___", cut also at position 0) is the essential name, in id order, and narrow them by matching the essential name */
 	uint32_t *c = NULL;
 	size_t nc = 0, cap = 0;
-
+	/* the first entry in the index whose key is name[:elen] (binary search) */
 	size_t lo = 0, hi = kb->nidx;
 	while (lo < hi) {
 		size_t mid = lo + (hi - lo) / 2;
@@ -183,7 +186,7 @@ int bml_kbtf_any_by_name(const struct bml_kbtf *kb, const char *name, uint32_t *
 		free(c);
 		return err_msg(err, 1, "not found");
 	}
-
+	/* AnyTypesByName: remove the types whose whole name differs. cilium v0.22 skips the next element after a removal (it does not step i back), and this code copies that too */
 	for (size_t i = 0; i < nc; i++) {
 		struct kbtf_type t;
 		bml_kbtf_type(kb, c[i], &t);

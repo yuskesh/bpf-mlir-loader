@@ -1,3 +1,5 @@
+/* maps/check.c — Parsed.CheckMapDecls (go/bindrt/mapdecl.go, section 12 of the requirements-format specification) and
+ * the problem messages. Split out of mapdecl.c. */
 #include "maps/internal.h"
 
 #include <stdarg.h>
@@ -31,7 +33,7 @@ char *md_fmts(const char *f, ...)
 	va_end(ap);
 	return p;
 }
-
+/* ---- problems ---- */
 
 void bml_map_problems_free(struct bml_map_problems *v)
 {
@@ -44,7 +46,7 @@ void bml_map_problems_free(struct bml_map_problems *v)
 	memset(v, 0, sizeof(*v));
 }
 
-
+/* Ownership moves to the callee (NULL means ""). */
 int md_add(struct bml_map_problems *v, char *map, const char *field, char *declared, char *elf)
 {
 	if (v->n == v->cap) {
@@ -72,13 +74,13 @@ char *bml_map_problem_string(const struct bml_map_problem *p)
 		return md_fmts("map %s: declared (%s), but the ELF has no such map", p->map, p->declared);
 	if (!strcmp(f, "undeclared"))
 		return md_fmts("map %s: the ELF holds it (%s), but it is not declared", p->map, p->elf);
-	if (!strcmp(f, "flags_undeclared"))
+	if (!strcmp(f, "flags_undeclared")) /* added in bpf-mlir v0.17.0: an omitted flags means "flags 0" */
 		return md_fmts("map %s: flags are not declared, but the ELF map has flags %s (omit flags only for maps whose flags are 0)", p->map, p->elf);
 	if (!strcmp(f, "decl") || !strcmp(f, "format"))
 		return md_fmts("map %s: %s", p->map, p->declared);
-	if (!strcmp(f, "struct_ops"))
+	if (!strcmp(f, "struct_ops")) /* from bpf-mlir's struct_ops declaration support */
 		return md_fmts("map %s: struct_ops table declared %s, but the ELF has %s", p->map, p->declared, p->elf);
-	if (!strcmp(f, "inner"))
+	if (!strcmp(f, "inner")) /* from bpf-mlir's map-in-map (inner map) support */
 		return md_fmts("map %s: inner map template declared %s, but the ELF has %s", p->map, p->declared, p->elf);
 	if (!strcmp(f, "record"))
 		return md_fmts("%s: the same name with a different layout — declared %s, but the ELF BTF has %s", p->map, p->declared, p->elf);
@@ -98,7 +100,8 @@ static int streq_str(const char *a, const struct bml_str *s)
 	return s->len == n && (n == 0 || memcmp(s->p, a, n) == 0);
 }
 
-
+/* The struct_ops declaration against the ELF's table (the struct_ops check of go/bindrt/mapdecl.go; the table is
+ * re-read for every declaration). 0 and -1 mean what they mean for md_add. */
 static int check_struct_ops(const struct bml_map_decl *m, const void *elf, size_t elf_len, struct bml_map_problems *out)
 {
 	if (!elf)
@@ -134,7 +137,7 @@ int bml_check_map_decls(const struct bml_requirements *req, const void *elf, siz
 			return -1;
 		return 1;
 	}
-	char *seen = calloc(d->n_maps + 1, 1);
+	char *seen = calloc(d->n_maps + 1, 1); /* one flag per declaration index; seen[d.Name] is looked up by name */
 	if (!seen)
 		return -1;
 #define SEEN(name) seen_name(d, seen, (name))
@@ -159,13 +162,13 @@ int bml_check_map_decls(const struct bml_requirements *req, const void *elf, siz
 			const struct bml_map *row = NULL;
 			for (size_t k = 0; k < req->n_maps; k++)
 				if (streq_str(m->name, &req->maps[k].symbol))
-					row = &req->maps[k];
+					row = &req->maps[k]; /* Go's rows[m.Symbol] = i: the last row wins */
 			if (!row) {
 				rc = md_add(out, md_xstrdup(m->name), "missing_in_elf", md_xstrdup(m->kind), NULL);
 			} else if (!streq_str(m->kind, &row->map_type) && !BML_MUT("maps.kind_continue")) {
 				rc = md_add(out, md_xstrdup(m->name), "kind", md_xstrdup(m->kind), md_xstrdup(row->map_type.p));
 			} else {
-				if (!streq_str(m->kind, &row->map_type))
+				if (!streq_str(m->kind, &row->map_type)) /* mutant maps.kind_continue: report the kind problem and keep comparing the other fields */
 					rc = md_add(out, md_xstrdup(m->name), "kind", md_xstrdup(m->kind), md_xstrdup(row->map_type.p));
 				if (!rc && !streq_str(m->key, &row->key))
 					rc = md_add(out, md_xstrdup(m->name), "key", md_xstrdup(m->key), md_xstrdup(row->key.p));
@@ -177,10 +180,12 @@ int bml_check_map_decls(const struct bml_requirements *req, const void *elf, siz
 				if (!rc && (m->has_flags || BML_MUT("maps.flags_always")) && m->flags != row->flags)
 					rc = md_add(out, md_xstrdup(m->name), "flags", md_fmts("%llu", (unsigned long long)m->flags),
 						 md_fmts("%llu", (unsigned long long)row->flags));
-
+				/* Since bpf-mlir v0.17.0 an omitted flags means "flags 0": if the ELF's flags are not 0 the problem is
+ * flags_undeclared (the mutant maps.flags_omit_unchecked does not report it). */
 				if (!rc && !m->has_flags && !BML_MUT("maps.flags_always") && !BML_MUT("maps.flags_omit_unchecked") && row->flags != 0)
 					rc = md_add(out, md_xstrdup(m->name), "flags_undeclared", NULL, md_fmts("%llu", (unsigned long long)row->flags));
-
+				/* Map-in-map support from bpf-mlir: the inner-map template is compared one way, from the declaration to the ELF's
+ * innermap row (InnerMapSpelling: the last innermap row of the same outer map, or "-" if there is none). */
 				if (!rc && m->has_inner) {
 					char *decl = md_fmts("kind=%s key=%s value=%s max_entries=%llu flags=%llu", m->inner_kind, m->inner_key, m->inner_value,
 							     (unsigned long long)m->inner_max_entries, (unsigned long long)m->inner_flags);
@@ -200,7 +205,7 @@ int bml_check_map_decls(const struct bml_requirements *req, const void *elf, siz
 						free(ein);
 					}
 				}
-				if (!rc && m->struct_ops)
+				if (!rc && m->struct_ops) /* bpf-mlir's struct_ops table check (needs the ELF) */
 					rc = check_struct_ops(m, elf, elf_len, out);
 			}
 		}

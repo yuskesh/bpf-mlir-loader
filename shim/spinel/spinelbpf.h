@@ -39,7 +39,8 @@ int64_t spinelbpf_result_unmet_count(int64_t r);
 char *spinelbpf_result_unmet(int64_t r, int64_t i);
 void spinelbpf_result_free(int64_t r);
 int64_t spinelbpf_policy_version(void);
-
+/* Per-CPU (as in spinel): out holds (number of possible CPUs) x round_up(size, 8) bytes, and the Value is the stride; vals
+ * holds (number of possible CPUs) x size bytes. */
 int64_t spinelbpf_possible_cpus(void);
 int64_t spinelbpf_percpu_get(int64_t obj, char *decl, int64_t *key, int64_t klen, int64_t *out, int64_t n);
 int64_t spinelbpf_percpu_put(int64_t obj, char *decl, int64_t *key, int64_t klen, int64_t *vals, int64_t n);

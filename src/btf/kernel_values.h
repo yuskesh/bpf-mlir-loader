@@ -1,3 +1,4 @@
+/* Full names in the target BTF, enum bit patterns and VAR slots. */
 #ifndef BML_BTF_KERNEL_VALUES_H
 #define BML_BTF_KERNEL_VALUES_H
 

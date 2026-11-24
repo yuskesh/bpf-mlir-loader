@@ -1,3 +1,4 @@
+/* elf/maps_symbols.h — go/layout.MapSymbols (a build-time export) */
 #ifndef BML_ELF_MAPS_SYMBOLS_H
 #define BML_ELF_MAPS_SYMBOLS_H
 

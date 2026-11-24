@@ -1,3 +1,8 @@
+/* abi/describe.c — returns the declaration of a loaded object's map, taken from the map rows of the
+ * ELF's requirements section. It is used by the shim that follows the spinel shape, which opens a ring
+ * buffer by name alone. The declaration is the ELF's own row, so a check against it always agrees
+ * with the ELF: this is as strong as the case where the caller has no declaration (spinel's
+ * ringbuf_open looks only at the map type), and it is not an entry that drops the check. */
 #include "abi/internal.h"
 
 #include <stdlib.h>
@@ -8,7 +13,7 @@
 #include "btf/layout.h"
 #include "util/gostr.h"
 
-
+/* Can go into a JSON string without escaping (printable ASCII, containing neither " nor \). */
 static int plain(const struct bml_str *s)
 {
 	for (size_t i = 0; i < s->len; i++)
@@ -17,7 +22,7 @@ static int plain(const struct bml_str *s)
 	return 1;
 }
 
-
+/* The size of the STRUCT record:<S> in the ELF's BTF (-1 if there is none). */
 static int64_t struct_size(const struct abi_object *o, const char *name)
 {
 	struct lbtf b;
@@ -46,7 +51,7 @@ static int64_t map_describe_body(int64_t obj, const char *name, int64_t name_len
 	for (size_t k = 0; k < o->req->n_maps; k++) {
 		const struct bml_map *m = &o->req->maps[k];
 		if (m->symbol.len == (size_t)name_len && (name_len == 0 || !memcmp(m->symbol.p, name, (size_t)name_len)))
-			row = m;
+			row = m; /* The last one wins, as with rows[m.Symbol] = i in the Go reference (bindrt). */
 	}
 	struct bpf_map *bm = row ? bpf_object__find_map_by_name(bml_obj_bpf(o->lo), row->symbol.p) : NULL;
 	if (!row || !bm) {
@@ -73,7 +78,7 @@ static int64_t map_describe_body(int64_t obj, const char *name, int64_t name_len
 	return abi_put(&r);
 }
 
-
+/* Counted as a running call of the object (see the note in run.c). */
 int64_t bml_map_describe(int64_t obj, const char *name, int64_t name_len)
 {
 	int64_t e;

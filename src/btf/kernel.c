@@ -1,3 +1,6 @@
+/* btf/kernel.c — reading, validating and looking up names in the target kernel's BTF: a copy of loadRawSpec,
+ * newDecoder, inflateType and TypeByName of cilium/ebpf v0.22. Formatting, UnderlyingType and Sizeof are in
+ * kernel_fmt.c. */
 #include "btf/kernel.h"
 
 #include <errno.h>
@@ -31,7 +34,7 @@ uint32_t bml_kbtf_u32(const struct bml_kbtf *kb, const uint8_t *p)
 	return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[1] << 8 | p[0];
 }
 
-
+/* cilium's stringTable.lookupSlow: offset <= length, the previous byte is NUL, and the string ends with NUL */
 static const char *str_at(const struct bml_kbtf *kb, uint32_t off)
 {
 	if (off == 0)
@@ -43,7 +46,7 @@ static const char *str_at(const struct bml_kbtf *kb, uint32_t off)
 	return (const char *)kb->strs + off;
 }
 
-
+/* btfType.DataLen (-1 for an unknown kind) */
 static int64_t data_len(uint32_t kind, uint32_t vlen)
 {
 	switch (kind) {
@@ -75,7 +78,7 @@ void bml_kbtf_type(const struct bml_kbtf *kb, uint32_t id, struct kbtf_type *t)
 	t->vlen = info & 0xffff;
 	t->kflag = info >> 31;
 	t->size_type = bml_kbtf_u32(kb, p + 8);
-	t->name = str_at(kb, bml_kbtf_u32(kb, p));
+	t->name = str_at(kb, bml_kbtf_u32(kb, p)); /* validated at load */
 	t->aux = p + 12;
 }
 
@@ -91,7 +94,7 @@ void bml_kbtf_member(const struct bml_kbtf *kb, const struct kbtf_type *t, uint3
 		m->offset &= 0xffffff;
 		return;
 	}
-
+	/* legacy bitfield: the member's type (a direct id) is an Int, and the Int's offset is > 0 or bits / 8 differs from its size */
 	struct kbtf_type it;
 	bml_kbtf_type(kb, m->type, &it);
 	if (it.kind != KBTF_INT)
@@ -120,7 +123,7 @@ const char *bml_kbtf_goname(uint32_t kind)
 	return kind < KBTF_NKINDS ? names[kind] : "?";
 }
 
-
+/* Name validation: newDecoder looks up type names; inflate looks up the names of members, arguments and enums */
 static int check_names(const struct bml_kbtf *kb, uint32_t id, const struct kbtf_type *t, char **err)
 {
 	size_t step = 0;
@@ -172,7 +175,7 @@ static int check_refs(const struct bml_kbtf *kb, uint32_t id, const struct kbtf_
 	return 0;
 }
 
-
+/* inflate's decl tag rules (the kind of the target and the component number) */
 static int check_decl_tag(const struct bml_kbtf *kb, uint32_t id, const struct kbtf_type *t, char **err)
 {
 	int32_t idx = (int32_t)bml_kbtf_u32(kb, t->aux);
@@ -229,7 +232,7 @@ int bml_kbtf_from_raw(uint8_t *raw, size_t len, struct bml_kbtf *kb, char **err)
 		fail(err, "parsing .BTF header: the header length %u is out of bounds", hdr_len);
 		goto bad;
 	}
-
+	/* after 24: the layout section (8 bytes; cilium reads it but does not use it) and a zero trailer */
 	for (size_t i = hdr_len >= 32 ? 32 : 24; i < hdr_len; i++)
 		if (raw[i] != 0) {
 			fail(err, "parsing .BTF header: header contains non-zero trailer");
@@ -256,7 +259,7 @@ int bml_kbtf_from_raw(uint8_t *raw, size_t len, struct bml_kbtf *kb, char **err)
 	kb->types = body + type_off;
 	kb->types_len = type_len;
 
-
+	/* allBtfTypeOffsets runs twice (count, then store the offsets) */
 	for (int pass = 0; pass < 2; pass++) {
 		uint32_t id = 1;
 		for (uint64_t o = 0; o < type_len; id++) {
@@ -293,7 +296,7 @@ int bml_kbtf_from_raw(uint8_t *raw, size_t len, struct bml_kbtf *kb, char **err)
 			goto bad;
 		}
 	}
-
+	/* From here on, cilium checks only when it looks up a type (a lazy inflate); a failure is -3 */
 	int rc = -3;
 	for (uint32_t id = 1; id < kb->n; id++) {
 		struct kbtf_type t;
@@ -318,8 +321,10 @@ out:
 	return rc;
 }
 
-
-
+/* /sys/kernel/btf/vmlinux cannot be opened (cilium goes on to findVMLinux whatever the reason). If all seven
+ * locations that cilium tries (the same as libbpf's) give ENOENT, cilium also reports "no BTF found" (-2). If any of
+ * them exists, or fails with something other than ENOENT, cilium reads that ELF, but the C code does not copy the ELF
+ * reading, so this is an error (-1). */
 static int no_sysfs(char **err)
 {
 	static const char *const loc[] = {

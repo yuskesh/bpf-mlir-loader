@@ -1,3 +1,4 @@
+/* Checks of the enum, core-enum, kernel-struct-size and FIB-flags rows, and of the rows that only a loader can decide. */
 #include "req/check_internal.h"
 
 #include <stdlib.h>

@@ -1,3 +1,5 @@
+/* maps/internal.h — internals of the map-declaration check (shared only inside maps/; mapdecl.c was split into
+ * several files before the map-declaration records work). */
 #ifndef BML_MAPS_INTERNAL_H
 #define BML_MAPS_INTERNAL_H
 
@@ -17,9 +19,9 @@ char *md_xstrdup(const char *s);
 char *md_fmts(const char *f, ...) __attribute__((format(printf, 1, 2)));
 /* CONTRACT: adds a problem; ownership of the strings moves (NULL means ""). Out of memory is -1 */
 int md_add(struct bml_map_problems *v, char *map, const char *field, char *declared, char *elf);
-
+/* The records check (records.c, the C copy of checkRecords). Out of memory is -1. */
 int md_check_records(const void *elf, size_t elf_len, const struct bml_map_decls *d, struct bml_map_problems *out);
-
+/* The globals check (globals.c, the C copy of checkGlobals). Out of memory is -1. */
 int md_check_globals(const void *elf, size_t elf_len, const struct bml_map_decls *d, struct bml_map_problems *out);
 
 #endif

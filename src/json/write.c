@@ -1,3 +1,4 @@
+/* json/write.c — string output identical to Go's encoding/json. Split out of json.c. */
 #include "json/internal.h"
 
 #include <stdarg.h>

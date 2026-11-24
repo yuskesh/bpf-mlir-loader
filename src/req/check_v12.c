@@ -1,3 +1,6 @@
+/* req/check_v12.c — judgement version 11, for the rows of format version 12 (a port of checkMulti in bpf-mlir's
+ * go/requirements/companion_v12.go, checkUSDT in usdt.go and the innermap map-type check in requirements.go). Reading the USDT note and
+ * its arguments is in usdt.c. */
 #include "req/check_internal.h"
 
 #include <stdio.h>
@@ -10,7 +13,7 @@
 #include "util/gostr.h"
 #include "util/mutation.h"
 
-
+/* mtargetArgsOf: the arguments of function number i among the mtargetarg rows, in row order. *args is malloc-ed (NULL when n is 0). */
 static int mtarget_args_of(const struct bml_attach *a, size_t i, struct bml_intarg **args, size_t *n)
 {
 	*args = NULL, *n = 0;
@@ -48,7 +51,7 @@ int ck_check_multi(struct ck *c, const struct bml_attach *a)
 			b.target = a->mtargets[i];
 			struct bml_intarg *ma = NULL;
 			size_t nm = 0;
-			if (a->n_mtarget_args > 0) {
+			if (a->n_mtarget_args > 0) { /* the mtargetarg arguments of function i, checked in the form of kprobearg */
 				if (mtarget_args_of(a, i, &ma, &nm)) {
 					free(ta);
 					return ck_fail(c, ck_dupn("out of memory"));
@@ -67,7 +70,7 @@ int ck_check_multi(struct ck *c, const struct bml_attach *a)
 		return 0;
 	}
 	free(ta);
-	struct bml_buf jb = {0};
+	struct bml_buf jb = {0}; /* the Name of a binary Unmet is the function list (strings.Join(MTargets, ",")) */
 	for (size_t i = 0; i < a->n_mtargets; i++) {
 		if (i)
 			bml_buf_adds(&jb, ",");
@@ -82,13 +85,13 @@ int ck_check_multi(struct ck *c, const struct bml_attach *a)
 	free(joined);
 	if (o <= 0)
 		return o;
-	struct ck_dsrc src;
+	struct ck_dsrc src; /* the source is read once per attach and shared between the targets */
 	ck_dsrc_init(&src, &elf, a->program.p);
 	for (size_t i = 0; i < nt; i++) {
 		struct bml_attach ca = *a;
 		struct bml_intarg *ma = NULL;
 		size_t nm = 0;
-		if (a->n_mtarget_args > 0) {
+		if (a->n_mtarget_args > 0) { /* the mtargetarg arguments of function i, checked in the form of uprobearg */
 			if (mtarget_args_of(a, i, &ma, &nm)) {
 				c->oom = 1;
 				break;
@@ -105,13 +108,13 @@ int ck_check_multi(struct ck *c, const struct bml_attach *a)
 	return 0;
 }
 
-
+/* usdtSpelling */
 static void spelling(char out[8], int size, int is_signed)
 {
 	snprintf(out, 8, "%c%d", is_signed ? 'i' : 'u', size * 8);
 }
 
-
+/* The semaphore and the arguments of one probe point (the body of the per-point loop of checkUSDT). */
 static void usdt_point(struct ck *c, const struct bml_attach *a, const struct bml_usdt_point *p, int64_t max_n)
 {
 	const char *P = a->program.p, *T = a->target.p;
@@ -158,7 +161,7 @@ static void usdt_point(struct ck *c, const struct bml_attach *a, const struct bm
 			c->oom = 1;
 			goto out;
 		}
-		int size = atoi(k->type.p + 1) / 8, is_signed = k->type.p[0] == 'i';
+		int size = atoi(k->type.p + 1) / 8, is_signed = k->type.p[0] == 'i'; /* usdtTypeOf: the type was already checked by parse to be one of i8 … u64 */
 		if (!size_ok) {
 			ck_add(c, "usdtarg_unknown", P, an, 0, err);
 		} else if (size != spec.size || is_signed != spec.is_signed) {
@@ -192,7 +195,8 @@ int ck_check_usdt(struct ck *c, const struct bml_attach *a)
 		return -1;
 	}
 	free(ta);
-
+	/* Loader declaration: none cannot attach USDT at all, plain cannot pass a ref_ctr_offset for a point that has a semaphore, and a missing
+	 * declaration is unknown (which blocks the load). */
 	const struct bml_loader_decl *d = ck_loader_of(c);
 	const char *ua = d->usdt_attach ? d->usdt_attach : "";
 	struct bml_buf qn = {0};
@@ -225,7 +229,7 @@ int ck_check_usdt(struct ck *c, const struct bml_attach *a)
 		free(rerr);
 		goto done;
 	}
-	const char *colon = strchr(T, ':');
+	const char *colon = strchr(T, ':'); /* strings.Cut(Target, ":"): if there is no colon the name is "" */
 	size_t pl = colon ? (size_t)(colon - T) : strlen(T);
 	const char *name = colon ? colon + 1 : "";
 	size_t n_mine = 0;
@@ -236,7 +240,7 @@ int ck_check_usdt(struct ck *c, const struct bml_attach *a)
 		ck_add(c, "usdt_probe", P, T, 0, ck_fmtd("the binary has no stapsdt note for %s (%zu points of other probes)", T, pts.n));
 		goto done;
 	}
-
+	/* more probe points than max_points of the compiler's spec map */
 	for (size_t i = 0; i < c->req->n_maps; i++) {
 		const struct bml_map *m = &c->req->maps[i];
 		size_t pre = strlen(BML_USDT_SPEC_MAP_PREFIX);
@@ -257,7 +261,8 @@ done:
 	return 0;
 }
 
-
+/* The map type of the inner template of a map-in-map. A false answer is reported as map_type (Detail "inner"); an Unknown answer is also a
+ * checking error, as for the outer map. */
 int ck_check_innermaps(struct ck *c)
 {
 	for (size_t i = 0; i < c->req->n_innermaps; i++) {

@@ -1,3 +1,7 @@
+// test/maps/maps_case.c — runs a maps case of the conformance corpus (object.bpf.o or requirements.txt, plus maps.json)
+// through the C check of map declarations, and prints JSON in the same form as want.json (the Go reference's runMapCase in
+// go/bindrt/conformance_test.go: the result, and the problems with map, field, declared and elf).
+//   maps_case <case dir>        rc: 0 means a verdict was printed, 2 means the case could not be run (a failure in the Go harness too)
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>

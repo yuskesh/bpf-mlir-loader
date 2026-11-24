@@ -1,3 +1,8 @@
+/* shim/build/elf_internal.h — the requirements read shared by the two exports that read an ELF (static inline — see internal.h).
+ *
+ * bindrt.Parse wraps every FromELF error as "cannot read requirements from the embedded ELF: <err>". bml writes
+ * checkELFVersion's two texts, the missing-section text and the requirements parse / sleepable texts as Go does; a failure of
+ * bml_elf_open is not debug/elf's FormatError text, so it is UNSUPPORTED elf-header (an unreadable section: elf-data). */
 #ifndef BML_SHIM_BUILD_ELF_INTERNAL_H
 #define BML_SHIM_BUILD_ELF_INTERNAL_H
 
@@ -5,8 +10,8 @@
 #include "req/req.h"
 #include "shim/build/internal.h"
 
-
-
+/* bindrt.Parse(elf): 0 and *req (bml_requirements_free), or the error set (FAIL with Go's text, UNSUPPORTED elf-header /
+ * elf-data, NOMEM) and its code. err must be initialized. */
 static inline int bb_read_requirements(const void *elf, size_t len, struct bml_requirements **req, struct bml_build_error *err)
 {
 	struct bml_req_elf_error ee;
