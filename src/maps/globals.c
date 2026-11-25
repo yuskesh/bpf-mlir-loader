@@ -47,6 +47,47 @@ static int cmp_gidx(const void *a, const void *b) /* name order as sort.SliceSta
 	return x->idx < y->idx ? -1 : (x->idx > y->idx);
 }
 
+/* Go's checkDataGlobal (bpf-mlir's record globals): a record global of section data, named in records, checked by the global-layout
+ * rules and the VAR's STRUCT. Undeclared .data globals are not reported (btf_global_symbols leaves .data out). */
+static int check_data_global(const void *elf, size_t elf_len, const struct bml_global_decl *g, const struct bml_map_decls *d,
+			     struct bml_map_problems *out)
+{
+	const struct bml_record_decl *r = NULL;
+	for (size_t i = 0; i < d->n_records; i++) /* Go's map: for a repeated key the last one wins */
+		if (!strcmp(d->records[i].name, g->record))
+			r = &d->records[i];
+	if (g->type_key || g->type[0])
+		return md_add(out, md_xstrdup(g->name), "decl", md_xstrdup("global type with section data"), NULL);
+	if (!g->record[0])
+		return md_add(out, md_xstrdup(g->name), "decl", md_xstrdup("global section \"data\" needs a record"), NULL);
+	if (!r) {
+		struct bml_buf b = {0};
+		bml_buf_adds(&b, "global record ");
+		bml_buf_add_goquote(&b, g->record, strlen(g->record));
+		bml_buf_adds(&b, " is not declared in records");
+		return md_add(out, md_xstrdup(g->name), "decl", bml_buf_take(&b), NULL);
+	}
+	char *err = NULL, *spell = md_fmts("data record:%s", g->record);
+	int has = btf_has_global_object(elf, elf_len, g->name, ".data", &err);
+	char *ps = has == 1 ? btf_global_record_problems(elf, elf_len, g->name, r->size, g->record, &err) : NULL;
+	if (has < 0 || (has == 1 && !ps && err)) {
+		free(spell);
+		char *m = md_fmts("the ELF cannot be read for the global check: %s", err ? err : "");
+		free(err);
+		return md_add(out, md_xstrdup(g->name), "format", m, NULL);
+	}
+	if (has == 0)
+		return md_add(out, md_xstrdup(g->name), "global_missing_in_elf", spell, NULL);
+	if (!ps) {
+		free(spell);
+		return -1;
+	}
+	if (ps[0])
+		return md_add(out, md_xstrdup(g->name), "global", spell, ps);
+	free(spell), free(ps);
+	return 0;
+}
+
 int md_check_globals(const void *elf, size_t elf_len, const struct bml_map_decls *d, struct bml_map_problems *out)
 {
 	if (!d->has_globals || (d->n_globals == 0 && BML_MUT("maps.globals_empty_is_nil")))
@@ -88,12 +129,20 @@ int md_check_globals(const void *elf, size_t elf_len, const struct bml_map_decls
 			continue;
 		}
 		seen[i] = 1;
+		if (!strcmp(g->section, "data")) {
+			rc = check_data_global(elf, elf_len, g, d, out);
+			continue;
+		}
 		if (strcmp(g->section, "rodata") && strcmp(g->section, "bss")) {
 			struct bml_buf b = {0};
 			bml_buf_adds(&b, "global section ");
 			bml_buf_add_goquote(&b, g->section, strlen(g->section));
-			bml_buf_adds(&b, " (want rodata or bss)");
+			bml_buf_adds(&b, " (want rodata, bss or data)");
 			rc = md_add(out, md_xstrdup(g->name), "decl", bml_buf_take(&b), NULL);
+			continue;
+		}
+		if (g->record_key || g->record[0]) {
+			rc = md_add(out, md_xstrdup(g->name), "decl", md_fmts("global record with section %s", g->section), NULL);
 			continue;
 		}
 		if (!bits) {

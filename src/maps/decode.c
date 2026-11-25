@@ -43,6 +43,7 @@ void bml_map_decls_free(struct bml_map_decls *d)
 		free(d->globals[i].name);
 		free(d->globals[i].section);
 		free(d->globals[i].type);
+		free(d->globals[i].record);
 	}
 	free(d->globals);
 	memset(d, 0, sizeof(*d));
@@ -123,8 +124,8 @@ static const struct bml_json_field mf_decl[] = {{"name", &md_string}, {"kind", &
 static const struct bml_json_desc md_decl = {.kind = BML_JD_STRUCT, .fields = mf_decl, .n_fields = 8};
 static const struct bml_json_desc md_arena_decl = {.kind = BML_JD_STRUCT, .fields = mf_decl, .n_fields = 9};
 static const struct bml_json_desc md_decls = {.kind = BML_JD_ARRAY, .child = &md_decl};
-static const struct bml_json_field mf_global[] = {{"name", &md_string}, {"section", &md_string}, {"type", &md_string}};
-static const struct bml_json_desc md_global = {.kind = BML_JD_STRUCT, .fields = mf_global, .n_fields = 3};
+static const struct bml_json_field mf_global[] = {{"name", &md_string}, {"section", &md_string}, {"type", &md_string}, {"record", &md_string}};
+static const struct bml_json_desc md_global = {.kind = BML_JD_STRUCT, .fields = mf_global, .n_fields = 4};
 static const struct bml_json_desc md_globals = {.kind = BML_JD_ARRAY, .child = &md_global};
 static const struct bml_json_field mf_top[] = {{"allow_undeclared", &md_bool}, {"records", &md_records},
 					       {"globals", &md_globals},        {"allow_undeclared_globals", &md_bool},
@@ -311,37 +312,15 @@ static int decode_records(const struct bml_json *rs, struct bml_map_decls *d, ch
 	return 0;
 }
 
-/* globals ([]GlobalDecl). A missing key or null is nil (not checked); `[]` is an empty list with has_globals set. Failure is -1; if *err is NULL the cause is out of memory. */
-static int decode_globals(const struct bml_json *gs, struct bml_map_decls *d, char **err)
+/* For decode_globals.c (the globals part, split out at its size limit) */
+int md_keys_ok(const struct bml_json *o, const char *const *allowed, size_t n, char **err)
 {
-	if (!gs || gs->type == BML_JSON_NULL)
-		return 0;
-	if (gs->type != BML_JSON_ARRAY) {
-		*err = md_xstrdup("json: cannot unmarshal into field globals of type []GlobalDecl");
-		return -1;
-	}
-	d->has_globals = 1;
-	d->globals = calloc(gs->n + 1, sizeof(*d->globals));
-	if (!d->globals)
-		return -1;
-	for (size_t i = 0; i < gs->n; i++) {
-		const struct bml_json *g = gs->items[i];
-		struct bml_global_decl *x = &d->globals[d->n_globals++];
-		if (g->type == BML_JSON_NULL) { /* Go's zero GlobalDecl */
-			if (!(x->name = md_xstrdup("")) || !(x->section = md_xstrdup("")) || !(x->type = md_xstrdup("")))
-				return -1;
-			continue;
-		}
-		if (g->type != BML_JSON_OBJECT) {
-			*err = md_xstrdup("json: cannot unmarshal into a global declaration");
-			return -1;
-		}
-		static const char *const gk[] = {"name", "section", "type"};
-		if (keys_ok(g, gk, 3, err) || jstr(g, "name", &x->name, err) || jstr(g, "section", &x->section, err) ||
-		    jstr(g, "type", &x->type, err))
-			return -1;
-	}
-	return 0;
+	return keys_ok(o, allowed, n, err);
+}
+
+int md_jstr(const struct bml_json *o, const char *key, char **out, char **err)
+{
+	return jstr(o, key, out, err);
 }
 
 int md_map_decls_parse(const char *data, size_t len, struct bml_map_decls *d, char **err, enum bml_json_rule *rule, int arena)
@@ -391,7 +370,7 @@ int md_map_decls_parse(const char *data, size_t len, struct bml_map_decls *d, ch
 		}
 		d->allow_undeclared_globals = aug->boolean;
 	}
-	if (decode_globals(bml_json_get(j, "globals"), d, err)) {
+	if (md_decode_globals(bml_json_get(j, "globals"), d, err)) {
 		if (!*err)
 			goto oom;
 		goto out;

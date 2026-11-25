@@ -13,7 +13,7 @@ mkdir -p "$TMPDIR" "$OUT"
 [ -f "$L/lib/libbml.a" ] || { echo "build-tools: $L/lib/libbml.a is missing (run scripts/build-libs.sh)" >&2; exit 1; }
 CC=(gcc -O2 -g -std=gnu11 -Wall -Wextra -Werror -I"$HERE/src" -I"$HERE/cmd" -I"$L/include")
 LIB=("$L/lib/libbml.a" "$L/lib/libbpf.a" "$L/lib/libelf.a" "$L/lib/libz.a")
-for t in netkit_finish_unit own_ids_unit live_target_rows_unit kernel_values_unit json_test parse_case check_case json_case maps_case; do
+for t in netkit_finish_unit own_ids_unit live_target_rows_unit kernel_values_unit sentinel_unit json_test parse_case check_case json_case maps_case; do
   "${CC[@]}" -o "$OUT/$t" "$("$HERE/scripts/srcs.sh" test "$t")" "${LIB[@]}"
 done
 # shellcheck disable=SC2046

@@ -88,6 +88,8 @@ char *bml_map_problem_string(const struct bml_map_problem *p)
 		return md_fmts("%s: declared (%s), but the ELF BTF has no such struct", p->map, p->declared);
 	if (!strcmp(f, "global"))
 		return md_fmts("global %s: declared %s, but the ELF differs: %s", p->map, p->declared, p->elf);
+	if (!strcmp(f, "global_missing_in_elf") && !strncmp(p->declared ? p->declared : "", "data ", 5))
+		return md_fmts("global %s: declared (%s), but the ELF has no such global in .data", p->map, p->declared);
 	if (!strcmp(f, "global_missing_in_elf"))
 		return md_fmts("global %s: declared (%s), but the ELF has no such global in .rodata / .bss", p->map, p->declared);
 	if (!strcmp(f, "global_undeclared"))

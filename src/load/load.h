@@ -37,6 +37,7 @@ enum bml_load_stage {
 	BML_LOAD_MAP_BTF,     /* the BTF key / value ids of a map differ from the ELF's */
 	BML_LOAD_MAP_FLAGS,   /* a map's flags differ from the ELF's (libbpf's definition at open time) */
 	BML_LOAD_ARENA,
+	BML_LOAD_STRUCT_OPS_TARGET, /* struct_ops guard G3: a member the ELF's struct_ops table sets is missing (or of another size) in the target's struct */
 };
 
 const char *bml_load_stage_name(int stage);

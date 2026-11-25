@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "util/errtext.h"
 #include "util/gostr.h"
 #include "util/mutation.h"
 
@@ -335,13 +336,13 @@ void abi_object_release(struct abi_object *o)
 	abi_unlock();
 }
 
-/* The errno text in the spelling of Go's syscall.Errno (glibc's strerror with the first letter lowercased,
- * bml_go_errno_str), in a per-thread buffer. The downstream tests compare texts such as
- * "operation not permitted". */
+/* The errno text of bml's own messages (class B of the errno tables), in a per-thread buffer: Go's syscall.Errno spelling (the
+ * downstream tests compare texts such as "operation not permitted"), except that a kernel-internal errno is named,
+ * e.g. "ENOTSUPP (kernel-internal errno 524)". */
 const char *abi_errno(int e)
 {
 	static __thread char buf[256];
-	char *s = bml_go_errno_str(e);
+	char *s = bml_errno_text(e);
 	snprintf(buf, sizeof buf, "%s", s ? s : "unknown error");
 	free(s);
 	return buf;

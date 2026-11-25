@@ -8,6 +8,7 @@
 #include "abi/internal.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,5 +159,171 @@ int64_t bml_testonly_ringbuf_fault(int64_t obj, const char *name, int64_t len)
 	uint8_t x = p[0]; /* a deliberate fault */
 	abi_object_release(o);
 	return abi_ok(x); /* not reached */
+}
+
+int64_t bml_testonly_struct_ops_object(const char *spec, int64_t len)
+{
+	char *s = name_of(spec, len), *save = NULL;
+	struct abi_object *o = calloc(1, sizeof *o);
+	if (!s || !o) {
+		free(s), free(o);
+		return abi_fail(BML_OTHER, "bml: out of memory or a bad spec");
+	}
+	o->fake = 1;
+	for (char *e = strtok_r(s, ",", &save); e; e = strtok_r(NULL, ",", &save)) {
+		char *c = strchr(e, ':');
+		struct abi_sop *ns = c ? realloc(o->sops, (o->n_sops + 1) * sizeof *ns) : NULL;
+		if (!ns)
+			goto bad;
+		o->sops = ns;
+		*c = 0;
+		int k = !strcmp(c + 1, "link") ? ABI_SOP_LINK : !strcmp(c + 1, "plain") ? ABI_SOP_PLAIN : !strcmp(c + 1, "map") ? ABI_SOP_OTHER : -1;
+		if (k < 0 || !(o->sops[o->n_sops].name = strdup(e)))
+			goto bad;
+		o->sops[o->n_sops].kind = k, o->sops[o->n_sops].busy = ABI_SOP_IDLE, o->sops[o->n_sops++].link = 0;
+	}
+	free(s);
+	abi_lock();
+	int64_t id = abi_handle_new(H_OBJECT, o, 0);
+	abi_unlock();
+	if (id < 0) {
+		abi_sops_free(o), free(o);
+		return abi_fail(BML_OTHER, "bml: out of memory");
+	}
+	return abi_ok(id);
+bad:
+	free(s);
+	abi_sops_free(o), free(o);
+	return abi_fail(BML_OTHER, "bml: struct_ops_object: a bad spec entry (want name:link|plain|map)");
+}
+
+static int64_t test_decls(const char *maps, int64_t len, struct bml_map_decls *d)
+{
+	char *err = NULL;
+	if (len < 0 || bml_map_decls_parse(maps ? maps : "", (size_t)len, d, &err) != 0) {
+		int64_t e = abi_fail(BML_OTHER, "bml: unreadable maps.json: %s", err ? err : "");
+		free(err);
+		return e;
+	}
+	return 0;
+}
+
+int64_t bml_testonly_globals_object(const char *maps, int64_t len)
+{
+	struct bml_map_decls d;
+	int64_t e = test_decls(maps, len, &d);
+	if (e)
+		return e;
+	struct abi_object *o = calloc(1, sizeof *o);
+	int bad = !o || abi_globals_keep(o, &d) != 0;
+	bml_map_decls_free(&d);
+	int64_t id = -1;
+	if (!bad) {
+		o->fake = 1;
+		abi_lock();
+		id = abi_handle_new(H_OBJECT, o, 0);
+		abi_unlock();
+	}
+	if (id < 0) {
+		if (o)
+			abi_globals_free(o);
+		free(o);
+		return abi_fail(BML_OTHER, "bml: out of memory");
+	}
+	return abi_ok(id);
+}
+
+int64_t bml_testonly_config_check(const char *maps, int64_t maps_len, const char *config, int64_t config_len)
+{
+	struct bml_map_decls d;
+	int64_t e = test_decls(maps, maps_len, &d);
+	if (e)
+		return e;
+	struct bml_rodata_value *v = NULL;
+	size_t n = 0;
+	e = abi_config(config, config_len, &d, NULL, 0, &v, &n);
+	free(v);
+	bml_map_decls_free(&d);
+	return e ? e : abi_ok((int64_t)n);
+}
+
+/* struct_ops (destroy before release): the synchronization seam. One armed pause point at a time; the paused thread waits for "resume". */
+static pthread_mutex_t seam_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t seam_cv = PTHREAD_COND_INITIALIZER;
+static char seam_point[32];
+static int seam_paused, seam_go, seam_destroy_fail, seam_handle_fail;
+
+void abi_test_pause(const char *point)
+{
+	pthread_mutex_lock(&seam_mu);
+	if (seam_point[0] && !strcmp(seam_point, point)) {
+		seam_point[0] = 0, seam_paused = 1, seam_go = 0;
+		pthread_cond_broadcast(&seam_cv);
+		while (!seam_go)
+			pthread_cond_wait(&seam_cv, &seam_mu);
+		seam_paused = 0;
+	}
+	pthread_mutex_unlock(&seam_mu);
+}
+
+int abi_test_destroy_rc(void)
+{
+	pthread_mutex_lock(&seam_mu);
+	int f = seam_destroy_fail;
+	seam_destroy_fail = 0;
+	pthread_mutex_unlock(&seam_mu);
+	if (f)
+		errno = EIO;
+	return f ? -1 : 0;
+}
+
+int abi_test_take_handle_failure(void)
+{
+	pthread_mutex_lock(&seam_mu);
+	int f = seam_handle_fail;
+	seam_handle_fail = 0;
+	pthread_mutex_unlock(&seam_mu);
+	return f;
+}
+
+int64_t bml_testonly_struct_ops_seam(const char *what, int64_t len)
+{
+	char *w = name_of(what, len);
+	if (!w)
+		return abi_fail(BML_OTHER, "bml: out of memory or a bad seam");
+	int ok = 1;
+	pthread_mutex_lock(&seam_mu);
+	if (!strcmp(w, "pause:detach-destroy") || !strcmp(w, "pause:attach-cleanup"))
+		snprintf(seam_point, sizeof seam_point, "%s", w + 6);
+	else if (!strcmp(w, "wait"))
+		while (!seam_paused)
+			pthread_cond_wait(&seam_cv, &seam_mu);
+	else if (!strcmp(w, "resume"))
+		seam_go = 1, pthread_cond_broadcast(&seam_cv);
+	else if (!strcmp(w, "destroy-fail"))
+		seam_destroy_fail = 1;
+	else if (!strcmp(w, "handle-fail"))
+		seam_handle_fail = 1;
+	else
+		ok = 0;
+	pthread_mutex_unlock(&seam_mu);
+	free(w);
+	return ok ? abi_ok(0) : abi_fail(BML_OTHER, "bml: struct_ops_seam: unknown seam");
+}
+
+int64_t bml_testonly_fake_link(void)
+{
+	struct abi_link *al = calloc(1, sizeof *al);
+	if (!al)
+		return abi_fail(BML_OTHER, "bml: out of memory");
+	al->fake = 1;
+	abi_lock();
+	int64_t id = abi_handle_new(H_LINK, al, 0);
+	abi_unlock();
+	if (id < 0) {
+		free(al);
+		return abi_fail(BML_OTHER, "bml: out of memory");
+	}
+	return abi_ok(id);
 }
 #endif

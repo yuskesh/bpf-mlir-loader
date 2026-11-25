@@ -35,8 +35,9 @@ void bml_buf_addf(struct bml_buf *b, const char *fmt, ...) __attribute__((format
 void bml_buf_add_goquote(struct bml_buf *b, const char *s, size_t n);
 /* Take the contents as a NUL-terminated string and empty b (NULL if oom is set). */
 char *bml_buf_take(struct bml_buf *b);
-/* The text of a Go syscall.Errno: glibc's strerror with the first letter lower-cased, which gives the same spelling
- * as Go's table. The result is malloc'd, not a static buffer. */
+/* The text of a Go syscall.Errno, exactly: Go's errors table (src/util/go_errno.tsv), else "errno N" (the errno tables; this
+ * spelling is compared with Go's, so the kernel-internal errnos are not named here). No glibc call, so the locale cannot
+ * change it. The result is malloc'd, not a static buffer. Defined in util/errtext.c. */
 char *bml_go_errno_str(int err);
 void bml_buf_free(struct bml_buf *b);
 

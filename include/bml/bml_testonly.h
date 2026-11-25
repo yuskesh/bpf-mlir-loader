@@ -36,6 +36,25 @@ int64_t bml_testonly_tpbtf_declared(const char *tp, int64_t len);
  * uprobe_multi link. "multi_perf" keeps the rewrite but attaches one uprobe per point (used to observe the kernel's
  * refusal). The mode takes effect from the next load. Any other mode returns BML_OTHER. */
 int64_t bml_testonly_usdt_mode(const char *mode, int64_t len);
+/* struct_ops: an object record with fake maps and no libbpf or kernel object, for the static controls of bml_attach_struct_ops
+ * and the close rule. spec is "name:kind,…" with kind link (a .struct_ops.link table), plain (a .struct_ops table) or map
+ * (another map). Its attach makes a fake live link (no kernel call) that bml_detach clears. It is not the process's loaded
+ * object (bml_load_checked is not blocked by it). The result's value is the object handle. */
+int64_t bml_testonly_struct_ops_object(const char *spec, int64_t len);
+/* struct_ops (destroy before release): the synchronization seam of the struct_ops controls. "pause:detach-destroy" or
+ * "pause:attach-cleanup" arms one pause (the next thread that reaches the point waits there); "wait" blocks until a thread
+ * is paused; "resume" lets it go on. "destroy-fail" makes the next fake link's destroy fail with EIO; "handle-fail" makes
+ * the next struct_ops attach fail to store its link handle (the cleanup path). Any other seam returns BML_OTHER. */
+int64_t bml_testonly_struct_ops_seam(const char *what, int64_t len);
+/* struct_ops: a fake live link of another kind (not struct_ops) for the close rule's control. The value is the link handle. */
+int64_t bml_testonly_fake_link(void);
+/* record globals: a fake object (no ELF, no kernel) that holds the globals of the maps.json maps, as a load keeps
+ * them, for bml_global_get's declaration-form controls. The value is the object handle. Only the paths that stop before
+ * the map read may be used on it (a .data record global, a mismatch, an undeclared name). */
+int64_t bml_testonly_globals_object(const char *maps, int64_t len);
+/* record globals: the load's configuration check (set / optional against the maps.json globals) without an ELF. It
+ * must stop before the symbol offsets; the value is the number of set values when it passes. */
+int64_t bml_testonly_config_check(const char *maps, int64_t maps_len, const char *config, int64_t config_len);
 
 #ifdef __cplusplus
 }

@@ -37,6 +37,8 @@ int lb_fail(struct bml_load_result *r, int stage, const char *fmt, ...) __attrib
 
 /* guards before load (pre.c) */
 int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r);
+/* 1 when the section is a program section of the guard's table (load/sections.c), else 0 */
+int lb_prog_section(const char *section);
 struct bpf_object;
 int lb_mark_sleepable(struct bpf_object *obj, struct bml_load_result *r); /* marks the program sleepable; called after open and before load */
 int lb_check_features(const uint8_t *elf, size_t len, const struct bml_requirements *req, const struct bml_caps *caps,

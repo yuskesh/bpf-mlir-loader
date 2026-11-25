@@ -87,17 +87,34 @@ int64_t bml_load_checked_config(const uint8_t *elf, int64_t n, const char *sha, 
 int64_t bml_load_checked_targets(const uint8_t *elf, int64_t n, const char *sha, int64_t sha_len, const char *maps, int64_t maps_len,
 				 const char *config, int64_t config_len, const char *targets, int64_t targets_len, int64_t caps_kind);
 /* Value of a global (bits zero-extended; .rodata is the value at load, .bss is the current value). decl is one element of the globals in maps.json, {name, section, type}:
- * if it differs from the declaration at load, BML_MAP_MISMATCH; a name not declared is BML_STATE. There is no entry point for rewriting .rodata after load (the kernel freezes it) */
+ * if it differs from the declaration at load, BML_MAP_MISMATCH; a name not declared is BML_STATE. There is no entry point for rewriting .rodata after load (the kernel freezes it).
+ * A .data record global (maps.json {name, section: "data", record}, checked at load) is not read: asked in either form it is BML_STATE, and the record
+ * form for an integer global is BML_MAP_MISMATCH. Any other shape of decl is BML_OTHER */
 int64_t bml_global_get(int64_t obj, const char *decl, int64_t decl_len);
 /* The Unmet entries that did not stop the load (read through the Unmet accessors) */
 int64_t bml_object_unmet(int64_t obj);
-/* Closes the object (readers and iterators first; links are not closed). Idempotent (a second call also returns OK); operations on a closed object are BML_STATE */
+/* Closes the object (readers and iterators first; links are not closed). Idempotent (a second call also returns OK); operations on a closed object are BML_STATE.
+ * While a struct_ops table of the object is registered (bml_attach_struct_ops), it returns BML_STATE naming the map and does not close */
 int64_t bml_close(int64_t obj);
 
 /* ---- Attach ---- */
 int64_t bml_attach_xdp(int64_t obj, const char *prog, int64_t prog_len, const char *ifname, int64_t if_len);
-/* Idempotent (a second call also returns OK) */
+/* Idempotent (a second call also returns OK).
+ * A struct_ops link (bml_attach_struct_ops): the detach closes the link's fd, and the kernel unregisters the table when
+ * the link's last reference goes. If the destroy reports an error, the fd is released anyway (libbpf frees the link and
+ * Linux close() always releases the fd), so bml clears the table's registration entry. The result is BML_OTHER naming
+ * the errno, and bml_close of the object is then allowed. The registration can outlive the detach only through a
+ * reference bml does not hold: a copy of the fd in a forked child that has not exec'd (bml's fds are close-on-exec), or
+ * an fd another process took by link ID. A later bml_attach_struct_ops of the same table then gets the kernel's refusal
+ * as BML_RUNTIME_CONFLICT. */
 int64_t bml_detach(int64_t link);
+/* Registers the struct_ops table `map` of a loaded object (a .struct_ops.link table only; loading never registers) and returns
+ * a link handle; bml_detach unregisters it. Errors: BML_STATE (a closed object, or the table is already registered by this
+ * object); BML_TARGET_REJECTED ("no such struct_ops map <m>", or "<m> is not a link table (.struct_ops.link)");
+ * BML_RUNTIME_CONFLICT (the kernel refused the registration; the message names the errno, e.g. EEXIST for a congestion
+ * control name already in use, or EBUSY for a second sched_ext scheduler). While a table is registered, bml_close of its
+ * object is BML_STATE naming the map. */
+int64_t bml_attach_struct_ops(int64_t obj, const char *map, int64_t map_len);
 /* fentry / fexit: attaches to the kernel function in the ELF section. A program of another kind is BML_STATE (mix-up); an attach error is BML_OTHER */
 int64_t bml_attach_fentry(int64_t obj, const char *prog, int64_t prog_len);
 int64_t bml_attach_fexit(int64_t obj, const char *prog, int64_t prog_len);

@@ -222,11 +222,3 @@ void bml_buf_free(struct bml_buf *b)
 	b->len = b->cap = 0;
 	b->oom = 0;
 }
-
-char *bml_go_errno_str(int err)
-{
-	char *s = strdup(strerror(err));
-	if (s && s[0] >= 'A' && s[0] <= 'Z')
-		s[0] = (char)(s[0] - 'A' + 'a');
-	return s;
-}

@@ -37,9 +37,12 @@ struct bml_record_decl {
 	size_t n_members;
 };
 
-/* A global variable declaration (the section is "rodata" or "bss"; the type is u8 … i64, and a be suffix is allowed). */
+/* A global variable declaration: section "rodata" or "bss" with a type u8 … i64 (a be suffix is allowed), or (bpf-mlir's
+ * record globals) section "data" with record, a key of the same document's records. type_key / record_key: the key was present
+ * in maps.json, whatever its value (Go's presence read of ParseMapDecls). */
 struct bml_global_decl {
-	char *name, *section, *type;
+	char *name, *section, *type, *record;
+	int type_key, record_key;
 };
 
 struct bml_map_decls {

@@ -149,7 +149,8 @@ static int field_map(struct bml_live *l, const char *name, uint32_t value_size, 
 	if (btf_fd < 0) {
 		int mb = lv_feat(l, LVF_MAP_BTF);
 		if (mb != LV_NOTSUP) { /* preserve failure of MarshalMapKV/NewHandle */
-			char *e=mb==LV_OK?(r.text?strdup(r.text):NULL):bml_go_errno_str(mb<-1?-mb:0);
+			/* lv_feat_errno: LV_NO_ERRNO (the no-errno sentinel) is errno 0; run() maps -EPERM to LV_NOTSUP for LVF_MAP_BTF and LVF_BTF */
+			char *e=mb==LV_OK?(r.text?strdup(r.text):NULL):bml_go_errno_str(lv_feat_errno(mb));
 			if(e){
 				if(mb==LV_OK)asprintf(why,"creating map: load BTF: %s",e);
 				else asprintf(why,"creating map: load BTF: detect support for Map BTF (Var/Datasec): %s%s",l->feat[LVF_BTF]==LV_OK?"":"detect support for BTF: ",e);

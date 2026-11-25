@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "load/internal.h"
 #include "load/arena.h"
+#include "load/struct_ops.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -20,7 +21,7 @@
 const char *bml_load_stage_name(int s)
 {
 	static const char *const n[] = {"ok", "env", "shape", "predict", "sanitize", "rewrite", "open", "libbpf",
-					"btf_dropped", "btf_changed", "ext_info", "map_btf", "map_flags", "arena"};
+					"btf_dropped", "btf_changed", "ext_info", "map_btf", "map_flags", "arena", "struct_ops_target"};
 	return s >= 0 && (size_t)s < sizeof n / sizeof *n ? n[s] : "?";
 }
 
@@ -178,7 +179,7 @@ int bml_load_guarded_values(const uint8_t *elf, size_t len, const struct bml_req
 {
 	memset(r, 0, sizeof *r);
 	*out = NULL;
-	if (lb_check_shape(elf, len, r) || fix_memlock(r) || lb_check_features(elf, len, req, caps, r))
+	if (lb_check_shape(elf, len, r) || lb_check_struct_ops(elf, len, req, r) || fix_memlock(r) || lb_check_features(elf, len, req, caps, r))
 		return -1;
 	struct bml_buf log = {0};
 	struct bml_obj *o = calloc(1, sizeof *o);

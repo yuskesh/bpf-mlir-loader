@@ -109,7 +109,9 @@ int64_t abi_config(const char *cfg, int64_t cfg_len, const struct bml_map_decls 
 		const struct bml_global_decl *g = find_global(d, nm, nl);
 		if (!g || strcmp(g->section, "rodata") != 0) {
 			e = fail_name(BML_MAP_MISMATCH, is_set ? "bml: config " : "bml: optional config ", nm, nl,
-				      g ? " is a .bss counter, not a .rodata configuration value" : " is not a declared .rodata global of the object");
+				      !g ? " is not a declared .rodata global of the object"
+				      : !strcmp(g->section, "data") ? " is a .data record global, not a .rodata configuration value" /* record globals */
+								    : " is a .bss counter, not a .rodata configuration value");
 			break;
 		}
 		covered[g - d->globals] = 1;
@@ -174,7 +176,9 @@ int abi_globals_keep(struct abi_object *o, const struct bml_map_decls *d)
 		g->name = strdup(d->globals[i].name);
 		g->section = strdup(d->globals[i].section);
 		g->type = strdup(d->globals[i].type);
-		if (!g->name || !g->section || !g->type)
+		g->record = strdup(d->globals[i].record ? d->globals[i].record : "");
+		g->type_key = d->globals[i].type_key, g->record_key = d->globals[i].record_key;
+		if (!g->name || !g->section || !g->type || !g->record)
 			return -1;
 	}
 	return 0;
@@ -186,6 +190,7 @@ void abi_globals_free(struct abi_object *o)
 		free(o->globals[i].name);
 		free(o->globals[i].section);
 		free(o->globals[i].type);
+		free(o->globals[i].record);
 	}
 	free(o->globals);
 	o->globals = NULL;
@@ -193,11 +198,14 @@ void abi_globals_free(struct abi_object *o)
 }
 
 /* Reads one declaration ({name, section, type}, an element of the globals of maps.json). -1 on failure. */
-static int parse_global(const char *s, int64_t n, char **name, char **section, char **type)
+/* The declaration the getter accepts: {name, section, type} (an integer global), or {name, section: "data",
+ * record}, the maps.json form of a bpf-mlir record global. The record form gives type "" and *record set; the
+ * integer form gives *record NULL. Any other shape is -1. */
+static int parse_global(const char *s, int64_t n, char **name, char **section, char **type, char **record)
 {
 	struct bml_json *j = NULL;
 	char *err = NULL;
-	*name = *section = *type = NULL;
+	*name = *section = *type = *record = NULL;
 	if (bml_json_parse(s, (size_t)n, &j, &err) != 0) {
 		free(err);
 		return -1;
@@ -205,11 +213,15 @@ static int parse_global(const char *s, int64_t n, char **name, char **section, c
 	int rc = -1;
 	if (j->type == BML_JSON_OBJECT && j->n == 3) {
 		const struct bml_json *a = bml_json_get(j, "name"), *b = bml_json_get(j, "section"), *c = bml_json_get(j, "type");
-		if (a && b && c && a->type == BML_JSON_STRING && b->type == BML_JSON_STRING && c->type == BML_JSON_STRING) {
-			*name = strdup(a->str);
-			*section = strdup(b->str);
-			*type = strdup(c->str);
-			rc = *name && *section && *type ? 0 : -1;
+		const struct bml_json *r = bml_json_get(j, "record");
+		if (a && b && a->type == BML_JSON_STRING && b->type == BML_JSON_STRING) {
+			if (c && c->type == BML_JSON_STRING) {
+				*name = strdup(a->str), *section = strdup(b->str), *type = strdup(c->str);
+				rc = *name && *section && *type ? 0 : -1;
+			} else if (r && r->type == BML_JSON_STRING && !strcmp(b->str, "data")) {
+				*name = strdup(a->str), *section = strdup(b->str), *type = strdup(""), *record = strdup(r->str);
+				rc = *name && *section && *type && *record ? 0 : -1;
+			}
 		}
 	}
 	bml_json_free(j);
@@ -221,10 +233,10 @@ static int64_t global_get_body(int64_t obj, const char *decl, int64_t decl_len)
 	int64_t e;
 	if (decl_len < 0 || (!decl && decl_len))
 		return abi_fail(BML_OTHER, "bml: a negative length or a NULL string with a length");
-	char *name, *section, *type;
-	if (parse_global(decl ? decl : "", decl_len, &name, &section, &type) != 0) {
-		free(name), free(section), free(type);
-		return abi_fail(BML_OTHER, "bml: unreadable global declaration (want {\"name\", \"section\", \"type\"})");
+	char *name, *section, *type, *record;
+	if (parse_global(decl ? decl : "", decl_len, &name, &section, &type, &record) != 0) {
+		free(name), free(section), free(type), free(record);
+		return abi_fail(BML_OTHER, "bml: unreadable global declaration (want {\"name\", \"section\", \"type\"} or {\"name\", \"section\": \"data\", \"record\"})");
 	}
 	struct abi_object *o = abi_object_get(obj, &e);
 	const struct bml_global_decl *g = NULL;
@@ -236,6 +248,12 @@ static int64_t global_get_body(int64_t obj, const char *decl, int64_t decl_len)
 		;
 	else if (!g)
 		e = abi_fail(BML_STATE, "bml: the object declares no global %s (maps.json globals)", name);
+	else if (!strcmp(g->section, "data")) /* bpf-mlir's record globals are checked, not read by this call (either form) */
+		e = abi_fail(BML_STATE, "bml: global %s is a .data record global (record:%s); bml_global_get reads .rodata / .bss integer globals only",
+			     name, g->record);
+	else if (record) /* the record form for an integer global */
+		e = abi_fail(BML_MAP_MISMATCH, "bml: global %s: declared here as data record:%s, but the object was loaded with %s %s", name, record,
+			     g->section, g->type);
 	else if (strcmp(g->section, section) || strcmp(g->type, type))
 		e = abi_fail(BML_MAP_MISMATCH, "bml: global %s: declared here as %s %s, but the object was loaded with %s %s", name, section, type, g->section, g->type);
 	else {
@@ -265,7 +283,7 @@ static int64_t global_get_body(int64_t obj, const char *decl, int64_t decl_len)
 		}
 		free(buf);
 	}
-	free(name), free(section), free(type);
+	free(name), free(section), free(type), free(record);
 	return e;
 }
 

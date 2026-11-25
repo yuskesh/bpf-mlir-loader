@@ -8,6 +8,7 @@
  * The BTF blobs are, byte for byte, the output of cilium's Builder.Marshal (dumped from Go). */
 #define _GNU_SOURCE
 #include "caps/live_internal.h"
+#include "util/mutation.h"
 
 #include <elf.h>
 #include <errno.h>
@@ -104,15 +105,17 @@ static int prog_load_raw(uint32_t type, const char *hex, const char *license, ui
 static int run(struct bml_live *l, int which)
 {
 	int rc, pre;
+	/* the sentinel's mutant "EPERM kept": EPERM is not mapped to LV_NOTSUP for LVF_BTF, LVF_MAP_BTF (and LVF_PROG_BTF, the same line) */
+	int eperm = BML_MUT("live.btf_eperm_kept") ? 0 : -EPERM;
 	switch (which) {
 	case LVF_BTF:
 		rc = probe_btf(which);
-		return rc == 0 ? LV_OK : rc == -EINVAL || rc == -EPERM ? LV_NOTSUP : rc;
+		return rc == 0 ? LV_OK : rc == -EINVAL || rc == eperm ? LV_NOTSUP : rc;
 	case LVF_MAP_BTF: case LVF_PROG_BTF:
 		if ((pre = lv_feat(l, LVF_BTF)) != LV_OK)
 			return pre;
 		rc = probe_btf(which);
-		return rc == 0 ? LV_OK : rc == -EINVAL || rc == -EPERM ? LV_NOTSUP : rc;
+		return rc == 0 ? LV_OK : rc == -EINVAL || rc == eperm ? LV_NOTSUP : rc;
 	case LVF_FUNC_LINKAGE: case LVF_DECL_TAGS: case LVF_TYPE_TAGS: case LVF_ENUM64:
 		if ((pre = lv_feat(l, which == LVF_FUNC_LINKAGE ? LVF_PROG_BTF : LVF_BTF)) != LV_OK)
 			return pre;
@@ -137,7 +140,13 @@ static int run(struct bml_live *l, int which)
 				   "GPL", 0, 0);
 		return rc == 0 ? LV_OK : LV_NOTSUP;
 	}
-	return -1;
+	return LV_NO_ERRNO;
+}
+
+int lv_feat_errno(int st)
+{
+	/* the sentinel's mutant "ambiguous -1": the ambiguity before the sentinel, where -1 (also -EPERM) was read as the sentinel */
+	return st == LV_NO_ERRNO || (st == -1 && BML_MUT("live.no_errno_minus_one")) ? 0 : -st;
 }
 
 int lv_feat(struct bml_live *l, int which)

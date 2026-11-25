@@ -188,7 +188,7 @@ static int btf_handle(struct bml_live *l, const uint8_t *btf, size_t len, struct
 	}
 	if (hb != LV_OK) {
 		free(log);
-		r->err = hb < -1 ? -hb : 0;
+		r->err = lv_feat_errno(hb); /* LV_NO_ERRNO (the no-errno sentinel) is errno 0; run() maps -EPERM to LV_NOTSUP for LVF_BTF */
 		if(reason)lv_btf_reason(r,0,NULL,0);
 		return -1;
 	}

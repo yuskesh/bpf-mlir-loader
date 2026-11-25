@@ -13,6 +13,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 
+#include "load/struct_ops.h"
 #include "util/mutation.h"
 
 int lb_capture_maps(struct bpf_object *obj, struct lb_map_def **defs, size_t *n)
@@ -191,7 +192,10 @@ int lb_check_loaded(struct bpf_object *obj, const struct lb_map_def *defs, size_
 		memset(&mi, 0, sizeof mi);
 		if (bpf_map_get_info_by_fd(bpf_map__fd(m), &mi, &l) != 0)
 			return lb_fail(r, BML_LOAD_MAP_BTF, "map %s: the kernel's info cannot be read (%s)", defs[i].name, lb_errno(errno));
-		if (mi.btf_key_type_id != defs[i].key_id || mi.btf_value_type_id != defs[i].value_id ||
+		if (bpf_map__type(m) == BPF_MAP_TYPE_STRUCT_OPS) { /* struct_ops: created with key / value 0 and the vmlinux value type */
+			if (lb_sop_check_loaded_map(obj, m, defs[i].value_id, &mi, r))
+				return -1;
+		} else if (mi.btf_key_type_id != defs[i].key_id || mi.btf_value_type_id != defs[i].value_id ||
 		    ((defs[i].key_id || defs[i].value_id) && mi.btf_id != kid))
 			return lb_fail(r, BML_LOAD_MAP_BTF,
 				       "map %s: the kernel has BTF key %u / value %u (BTF %u), the ELF %u / %u — libbpf dropped the map's BTF (M1 / M2)",

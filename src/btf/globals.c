@@ -172,18 +172,21 @@ static void add_bind(struct bml_buf *b, unsigned v)
 		bml_buf_addf(o, __VA_ARGS__);                                                                                      \
 	} while (0)
 
-/* Go's checkGlobal */
+/* Go's checkGlobal. record (bpf-mlir's record globals) is a record global of .data: the name of the STRUCT the records
+ * check reads; NULL for the integer globals and the struct_ops binding check. */
 static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms, size_t ns, const struct lbtf *b, const struct brel *rels,
-			 size_t nr, const char *name, const char *section, uint32_t size, int is_signed, struct bml_buf *o)
+			 size_t nr, const char *name, const char *section, uint32_t size, int is_signed, const char *record,
+			 struct bml_buf *o)
 {
 	const struct bml_elf_sym *sym = NULL;
+	size_t sym_idx = 0; /* the selected symbol's table index (syms starts at table index 1) */
 	for (size_t i = 0; i < ns; i++) {
 		if (!strcmp(syms[i].name, name) && BML_ST_TYPE(syms[i].info) == BML_STT_OBJECT) {
 			if (sym) { /* Go returns only this message (there are no problems yet) */
 				PROB("global %s: the ELF has two symbols of that name", name);
 				return;
 			}
-			sym = &syms[i];
+			sym = &syms[i], sym_idx = i + 1;
 		}
 	}
 	if (!sym) {
@@ -219,10 +222,15 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 		PROB("global %s: DATASEC %s has size %u (neither 0 nor the ELF section size %llu)", name, section, ds->size,
 		     (unsigned long long)sec->size);
 	const struct lsecinfo *vsi = NULL;
+	unsigned nvars = 0;
 	for (uint32_t i = 0; i < ds->n_secinfo; i++) {
 		uint32_t id = ds->secinfo[i].type_id;
 		if (id < b->n && b->t[id].kind == 14 && !strcmp(b->t[id].name, name))
-			vsi = &ds->secinfo[i]; /* Go does not break either: the last one wins */
+			vsi = &ds->secinfo[i], nvars++; /* Go does not break either: the last one wins */
+	}
+	if (record && nvars > 1) { /* a record global binds to exactly one entry */
+		PROB("global %s: DATASEC %s has %u VARs %s", name, section, nvars, name);
+		return;
 	}
 	if (!vsi) {
 		PROB("global %s: DATASEC %s has no VAR %s", name, section, name);
@@ -234,7 +242,13 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 		if (rels[i].off == vsi->pos)
 			r = &rels[i];
 	if (r) { /* a relocatable .o: its DATASEC offsets are carried by relocations, so add the relocation symbol's value */
-		if (r->rtype != R_BPF_64_ABS32 && r->rtype != R_BPF_64_NODYLD32)
+		if (record && r->sym != sym_idx)
+			PROB("global %s: the DATASEC offset relocation refers to symbol %s at index %u (the OBJECT symbol is at index %zu)",
+			     name, (r->sym != 0 && r->sym <= ns) ? syms[r->sym - 1].name : "?", r->sym, sym_idx);
+		else if (record && r->sym != 0 && r->sym <= ns && syms[r->sym - 1].value > UINT64_MAX - off)
+			PROB("global %s: the DATASEC offset %u plus the relocation symbol's value %llu overflows", name, vsi->offset,
+			     (unsigned long long)syms[r->sym - 1].value);
+		else if (r->rtype != R_BPF_64_ABS32 && r->rtype != R_BPF_64_NODYLD32)
 			PROB("global %s: the DATASEC offset relocation has type %u (not R_BPF_64_ABS32 / R_BPF_64_NODYLD32)", name, r->rtype);
 		else if (r->sym == 0 || r->sym > ns || strcmp(syms[r->sym - 1].name, name))
 			PROB("global %s: the DATASEC offset relocation refers to symbol %s", name,
@@ -247,22 +261,77 @@ static void check_global(const struct bml_elf *e, const struct bml_elf_sym *syms
 		     vsi->offset, (unsigned long long)sym->value);
 	if ((uint64_t)vsi->size != sym->size)
 		PROB("global %s: the DATASEC size is %u (the ELF symbol has %llu)", name, vsi->size, (unsigned long long)sym->size);
-	if (sec && (uint64_t)vsi->offset + vsi->size > sec->size)
+	if (record) { /* the effective offset, subtraction-safe */
+		if (sec && (off > sec->size || (uint64_t)vsi->size > sec->size - off))
+			PROB("global %s: the DATASEC entry at effective offset %llu of size %u exceeds the ELF section size %llu", name,
+			     (unsigned long long)off, vsi->size, (unsigned long long)sec->size);
+	} else if (sec && (uint64_t)vsi->offset + vsi->size > sec->size)
 		PROB("global %s: the DATASEC range [%u, %u) exceeds the ELF section size %llu", name, vsi->offset,
 		     (uint32_t)(vsi->offset + vsi->size), (unsigned long long)sec->size); /* Go's uint32 sum (it wraps around) */
 	const struct ltype *vt = btf_layout_resolve(b, b->t[vsi->type_id].type_id);
+	if (is_signed < 0) /* struct_ops: a struct_ops table (btf_global_binding): the binding only, no INT type rule */
+		return;
+	if (record) { /* a record global: the records check's STRUCT itself (names are unique: the parse refuses two) */
+		const struct ltype *want = NULL;
+		for (size_t i = 0; i < b->n && !want; i++)
+			if (b->t[i].kind == 4 && b->t[i].name[0] && !strcmp(b->t[i].name, record))
+				want = &b->t[i];
+		if (vt->kind != 4)
+			PROB("global %s: the VAR type (kind %u) is not STRUCT", name, vt->kind);
+		else if (strcmp(vt->name, record))
+			PROB("global %s: the VAR type is STRUCT %s (declared %s)", name, vt->name, record);
+		else if (want != vt)
+			PROB("global %s: the VAR type is not the STRUCT %s that the records check reads", name, record);
+		return;
+	}
 	if (vt->kind != 1) {
 		PROB("global %s: the VAR type (kind %u) is not INT", name, vt->kind);
 	} else {
 		if (vt->size != size)
 			PROB("global %s: the VAR type %s has size %u (declared %u)", name, vt->name, vt->size, size);
-		if (!!vt->is_signed != !!is_signed)
+		if (!!vt->is_signed != (is_signed != 0))
 			PROB("global %s: the VAR type %s has signed=%s (declared %s)", name, vt->name, vt->is_signed ? "true" : "false",
 			     is_signed ? "true" : "false");
 	}
 }
 
+static char *global_problems(const void *data, size_t len, const char *name, const char *section, uint32_t size, int is_signed,
+			     const char *record, char **err);
+
 char *btf_global_problems(const void *data, size_t len, const char *name, const char *section, uint32_t size, int is_signed, char **err)
+{
+	return global_problems(data, len, name, section, size, is_signed, NULL, err);
+}
+
+char *btf_global_record_problems(const void *data, size_t len, const char *name, uint32_t size, const char *record, char **err)
+{
+	return global_problems(data, len, name, ".data", size, 0, record, err);
+}
+
+int btf_has_global_object(const void *data, size_t len, const char *name, const char *section, char **err)
+{
+	*err = NULL;
+	struct bml_elf e;
+	if (bml_elf_open(data, len, &e, err))
+		return -1;
+	struct bml_elf_sym *syms = NULL;
+	size_t ns = 0;
+	int rc = -1;
+	if (read_symbols(&e, &syms, &ns, err) == 0) {
+		rc = 0;
+		for (size_t i = 0; i < ns && !rc; i++) {
+			const struct bml_elf_sym *s = &syms[i];
+			rc = !strcmp(s->name, name) && BML_ST_TYPE(s->info) == BML_STT_OBJECT && ST_BIND(s->info) == STB_GLOBAL &&
+			     s->shndx < e.n_sections && !strcmp(e.sections[s->shndx].name, section);
+		}
+	}
+	free(syms);
+	bml_elf_close(&e);
+	return rc;
+}
+
+static char *global_problems(const void *data, size_t len, const char *name, const char *section, uint32_t size, int is_signed,
+			     const char *record, char **err)
 {
 	*err = NULL;
 	struct bml_elf e;
@@ -283,7 +352,7 @@ char *btf_global_problems(const void *data, size_t len, const char *name, const 
 	if (btf_relocs(&e, &rels, &nr, err))
 		goto done;
 	struct bml_buf o = {0};
-	check_global(&e, syms, ns, &b, rels, nr, name, section, size, is_signed, &o);
+	check_global(&e, syms, ns, &b, rels, nr, name, section, size, is_signed, record, &o);
 	res = bml_buf_take(&o); /* empty is ""; NULL means out of memory (*err is NULL) */
 done:
 	free(rels);

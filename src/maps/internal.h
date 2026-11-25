@@ -15,6 +15,11 @@ int md_check_arena_decl(const struct bml_requirements *req, const struct bml_map
 int md_validate_map_json(struct bml_json *j, const struct bml_json_desc *top, const struct bml_json_desc *base,
 	const struct bml_json_desc *arena, int one, char **err, enum bml_json_rule *rule);
 
+/* decode.c's strict-key and string readers, and the globals decoder (decode_globals.c) */
+int md_keys_ok(const struct bml_json *o, const char *const *allowed, size_t n, char **err);
+int md_jstr(const struct bml_json *o, const char *key, char **out, char **err);
+int md_decode_globals(const struct bml_json *gs, struct bml_map_decls *d, char **err);
+
 char *md_xstrdup(const char *s);
 char *md_fmts(const char *f, ...) __attribute__((format(printf, 1, 2)));
 /* CONTRACT: adds a problem; ownership of the strings moves (NULL means ""). Out of memory is -1 */

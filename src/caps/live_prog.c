@@ -237,19 +237,16 @@ static int probe_helper(struct bml_live *l, uint32_t pt, uint32_t h)
 	}
 	int ok = lv_prog_load(l, &p, &r) == 0;
 	lv_close(r.fd);
-	int st = -1;
 	char tag[16];
 	snprintf(tag, sizeof tag, "#%u", h);
-	if (ok)
-		st = LV_OK;
-	else if (!r.verifier)
-		st = r.notsup ? LV_NOTSUP : -1;
-	else if (r.err == EACCES)
-		st = LV_OK;
-	else if (r.err == EINVAL && helper_rejected(r.lines, r.n_lines > 5 && !BML_MUT("live.helper_all_lines") ? r.n_lines - 5 : 0, r.n_lines, tag))
-		st = LV_NOTSUP;
+	/* cilium's haveProgramHelper first (EACCES is supported; ErrNotSupported only for a refusal in the last five lines),
+	 * then kload's whole-log rescue of what is left (kload's helper-log rule) */
+	struct lv_helper_in in = {.verifier = r.verifier, .err = r.err, .lines = r.lines, .n_lines = r.n_lines};
+	in.ok = ok || (r.verifier && r.err == EACCES);
+	in.notsup = !in.ok && (!r.verifier ? r.notsup : r.err == EINVAL && helper_rejected(r.lines, r.n_lines > 5 ? r.n_lines - 5 : 0, r.n_lines, tag));
+	int st = lv_helper_answer(&in, h, NULL);
 	lv_res_free(&r);
-	return st;
+	return st == LV_OK || st == LV_NOTSUP ? st : -1;
 }
 
 int bml_live_helper(struct bml_live *l, int64_t prog_type_id, int64_t helper_id, int *out, char **msg)

@@ -1,7 +1,7 @@
 /* abi/run_wave1.c — test runs of the first wave of program kinds, which need no attach target: the skb
  * families, flow_dissector, kinds whose input is a ctx (syscall, raw_tp, sk_lookup), and netfilter.
  * The kind of a program is decided in one place, from the guard's section table (sec_defs in
- * load/pre.c, bml_load_section_kind), so adding a kind later only needs a new table row.
+ * load/sections.c, bml_load_section_kind), so adding a kind later only needs a new table row.
  * Every run repeats once and the value is the return value (int32). Mixing up the kind is BML_STATE;
  * a length or value that bml itself rules out is BML_VALUE_RANGE; a kernel error is BML_OTHER. */
 #define _GNU_SOURCE

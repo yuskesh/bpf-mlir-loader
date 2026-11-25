@@ -6,6 +6,7 @@
 #ifndef BML_CAPS_LIVE_INTERNAL_H
 #define BML_CAPS_LIVE_INTERNAL_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -61,8 +62,28 @@ int lv_prog_load(struct bml_live *l, const struct lv_prog *p, struct lv_res *r);
 int lv_btf_handle(struct bml_live *l, const uint8_t *btf, size_t len, struct lv_res *r);
 int lv_btf_handle_reason(struct bml_live *l, const uint8_t *btf, size_t len, struct lv_res *r);
 
-/* cilium's internal FeatureTest: LV_OK, LV_NOTSUP, or -errno for an error that is not remembered (-1 for an error without an errno) */
+/* kload's helperAnswer (kload's helper-log rule, live_helperlog.c): the helper probe's result after cilium's check. ok is the probe
+ * loading (or cilium's EACCES), notsup cilium's ErrNotSupported (its last-five-line check). The answer is LV_OK, LV_NOTSUP,
+ * LV_HELPER_KEPT (a checking error, never Unknown), or LV_HELPER_UNKNOWN (only the rescue_unknown mutant). */
+struct lv_helper_in {
+	int ok, notsup, verifier, err;
+	char **lines;
+	size_t n_lines;
+};
+/* helperLogOpts; NULL or the zero value is the product. The unit test (test/caps/helperlog_unit.c) sets the fields as
+ * bpf-mlir's mutants M1 (any_helper), M2 (window 5) and M3 (rescue_unknown). */
+struct lv_helper_opts {
+	int any_helper, window, rescue_unknown;
+};
+enum { LV_HELPER_KEPT = -1, LV_HELPER_UNKNOWN = -2 };
+int lv_helper_answer(const struct lv_helper_in *in, uint32_t id, const struct lv_helper_opts *o);
+
+/* cilium's internal FeatureTest: LV_OK, LV_NOTSUP, or -errno for an error that is not remembered (LV_NO_ERRNO for an error
+ * without an errno: the no-errno sentinel, INT_MIN, which no -errno can be). lv_feat_errno turns a negative answer into its errno (0 for
+ * LV_NO_ERRNO). */
+enum { LV_NO_ERRNO = INT_MIN };
 int lv_feat(struct bml_live *l, int which);
+int lv_feat_errno(int st);
 /* KernelMarshalOptions (the four are evaluated in order; each flag means "!= nil") */
 struct lv_kmo {
 	int strip_func_linkage, replace_decl_tags, replace_type_tags, replace_enum64;

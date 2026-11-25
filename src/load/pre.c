@@ -12,6 +12,8 @@
 #include "elf/elf.h"
 #include "maps/arena.h"
 #include "load/arena_extern.h"
+#include "load/kfunc_extern.h"
+#include "util/errtext.h"
 #include "util/mutation.h"
 
 int lb_fail(struct bml_load_result *r, int stage, const char *fmt, ...)
@@ -52,115 +54,7 @@ const char *lb_feat_name(int f)
 
 /* ---- the shape of the ELF ---- */
 
-/* The section forms of the programs that bpf-mlir's emitter writes (ProgramKinds.def), with their kind and test-run
- * family. The guard's ELF shape check and the C ABI's test-run kind decision both look here, so when a kind is added
- * only this table needs to change. prefix means the form is "<form>/<target>" (the target is not empty). */
-static const struct sec_def {
-	const char *name;
-	int prefix, wave1; /* wave1: 1 is the first wave of sections (the mutant load.wave1_sections_reject removes it); 2 is the second to fourth waves (the mutant load.wave24_sections_reject removes it) */
-	const char *kind;
-	int family;
-} sec_defs[] = {
-	{".text", 0, 0, "", BML_RUN_NONE},
-	{"xdp", 0, 0, "xdp", BML_RUN_XDP},
-	{"tcx/ingress", 0, 0, "sched_cls", BML_RUN_SKB},
-	{"tcx/egress", 0, 0, "sched_cls", BML_RUN_SKB},
-	{"uprobe", 0, 0, "uprobe", BML_RUN_NONE},
-	{"kprobe/", 1, 0, "kprobe", BML_RUN_NONE},
-	{"uprobe/", 1, 0, "uprobe", BML_RUN_NONE},
-	{"fentry/", 1, 0, "fentry", BML_RUN_TRACING},
-	{"fexit/", 1, 0, "fexit", BML_RUN_TRACING},
-	{"tp_btf/", 1, 0, "tp_btf", BML_RUN_TRACING},
-	/* The first wave of bpf-mlir's program-type coverage (libbpf's behavior for these sections was examined when they were added) */
-	{"socket", 0, 1, "socket_filter", BML_RUN_SKB},
-	{"action", 0, 1, "sched_act", BML_RUN_SKB},
-	{"cgroup_skb/ingress", 0, 1, "cgroup_skb", BML_RUN_SKB},
-	{"cgroup_skb/egress", 0, 1, "cgroup_skb", BML_RUN_SKB},
-	{"lwt_in", 0, 1, "lwt_in", BML_RUN_SKB},
-	{"lwt_out", 0, 1, "lwt_out", BML_RUN_SKB},
-	{"lwt_xmit", 0, 1, "lwt_xmit", BML_RUN_SKB},
-	{"flow_dissector", 0, 1, "flow_dissector", BML_RUN_FLOW},
-	{"sk_lookup", 0, 1, "sk_lookup", BML_RUN_CTX},
-	{"netfilter", 0, 1, "netfilter", BML_RUN_NF},
-	{"uretprobe", 0, 1, "uretprobe", BML_RUN_NONE},
-	{"uretprobe/", 1, 1, "uretprobe", BML_RUN_NONE}, /* the repository's uretprobe sections are uretprobe/<symbol> (the first survey looked only at ELFs that the check already stops, and missed this one) */
-	{"syscall", 0, 1, "syscall", BML_RUN_CTX},
-	{"raw_tp/", 1, 1, "raw_tp", BML_RUN_CTX},
-	{"kretprobe/", 1, 1, "kretprobe", BML_RUN_NONE},
-	{"iter/", 1, 1, "iter", BML_RUN_NONE},
-	{"fmod_ret/", 1, 1, "fmod_ret", BML_RUN_TRACING},
-	/* Fourth-wave tracepoint (libbpf's tracepoint+ is SEC_NONE with expected attach type 0, and is not rewritten at load time). Attach is done by bml_attach_tracepoint. */
-	{"tracepoint/", 1, 0, "tracepoint", BML_RUN_NONE},
-	/* Second to fourth waves (sections from bpf-mlir's ProgramAttaches.def; libbpf's behavior for them was examined when they were added). No test-run hook is opened (family NONE).
-	 * freplace (load needs the target program's fd) and struct_ops (libbpf recreates maps and changes autoload) are not in the table; they are handled separately. */
-	{"lsm/", 1, 2, "lsm", BML_RUN_NONE},
-	{"lsm.s/", 1, 2, "lsm_s", BML_RUN_NONE},
-	{"cgroup/sock_create", 0, 2, "cgroup_sock", BML_RUN_NONE},
-	{"cgroup/sock_release", 0, 2, "cgroup_sock", BML_RUN_NONE},
-	{"cgroup/post_bind4", 0, 2, "cgroup_sock", BML_RUN_NONE},
-	{"cgroup/post_bind6", 0, 2, "cgroup_sock", BML_RUN_NONE},
-	{"cgroup/bind4", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/bind6", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/connect4", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/connect6", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/sendmsg4", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/sendmsg6", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/recvmsg4", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/recvmsg6", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/getpeername4", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/getpeername6", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/getsockname4", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"cgroup/getsockname6", 0, 2, "cgroup_sock_addr", BML_RUN_NONE},
-	{"sockops", 0, 2, "sock_ops", BML_RUN_NONE},
-	{"cgroup/dev", 0, 2, "cgroup_device", BML_RUN_NONE},
-	{"cgroup/sysctl", 0, 2, "cgroup_sysctl", BML_RUN_NONE},
-	{"cgroup/getsockopt", 0, 2, "cgroup_sockopt", BML_RUN_NONE},
-	{"cgroup/setsockopt", 0, 2, "cgroup_sockopt", BML_RUN_NONE},
-	{"lwt_seg6local", 0, 2, "lwt_seg6local", BML_RUN_NONE},
-	{"sk_skb/stream_verdict", 0, 2, "sk_skb", BML_RUN_NONE},
-	{"sk_skb/stream_parser", 0, 2, "sk_skb", BML_RUN_NONE},
-	{"sk_msg", 0, 2, "sk_msg", BML_RUN_NONE},
-	{"sk_reuseport", 0, 2, "sk_reuseport", BML_RUN_NONE},
-	{"sk_reuseport/migrate", 0, 2, "sk_reuseport", BML_RUN_NONE},
-	{"perf_event", 0, 2, "perf_event", BML_RUN_NONE},
-	{"raw_tp.w/", 1, 2, "raw_tp_writable", BML_RUN_NONE},
-	{"lirc_mode2", 0, 2, "lirc_mode2", BML_RUN_NONE},
-	/* USDT (libbpf's usdt+; the UPROBE_MULTI rewrite at load time is removed by usdt_point_form in load.c). Attach is done by bml_attach_usdt. */
-	{"usdt", 0, 0, "usdt", BML_RUN_NONE},
-	/* ksyscall (libbpf's ksyscall+ is KPROBE and SEC_NONE, and loads like a kprobe; bpf-mlir does not emit kretsyscall). Attach is done by bml_attach_ksyscall. */
-	{"ksyscall/", 1, 0, "ksyscall", BML_RUN_NONE},
-	/* Sections introduced with requirements formats 30 to 32 (the BPF_F_SLEEPABLE check is in load.c). No test-run hook is opened. The mutant load.target_sections_reject restores the stop at stage A. */
-	{"fentry.s/", 1, 3, "fentry", BML_RUN_NONE},
-	{"netkit/primary", 0, 3, "netkit", BML_RUN_NONE},
-	{"netkit/peer", 0, 3, "netkit", BML_RUN_NONE},
-};
-
-static const struct sec_def *sec_def_of(const char *n)
-{
-	int skip_w1 = BML_MUT("load.wave1_sections_reject"), skip_w24 = BML_MUT("load.wave24_sections_reject");
-	for (size_t i = 0; n && i < sizeof sec_defs / sizeof *sec_defs; i++) {
-		const struct sec_def *d = &sec_defs[i];
-		if ((d->wave1 == 1 && skip_w1) || (d->wave1 == 2 && skip_w24) || (d->wave1 == 3 && BML_MUT("load.target_sections_reject")))
-			continue;
-		size_t l = strlen(d->name);
-		if (d->prefix ? (strncmp(n, d->name, l) == 0 && n[l]) : strcmp(n, d->name) == 0)
-			return d;
-	}
-	return NULL;
-}
-
-const char *bml_load_section_kind(const char *section, int *family)
-{
-	const struct sec_def *d = sec_def_of(section);
-	if (family)
-		*family = d ? d->family : BML_RUN_NONE;
-	return d ? d->kind : NULL;
-}
-
-static int prog_section(const char *n)
-{
-	return sec_def_of(n) != NULL;
-}
+/* The program sections are the table of load/sections.c (lb_prog_section). */
 
 /* content sections (a relocation may target them: debug, BTF and eh_frame) */
 static int meta_section(const char *n)
@@ -171,11 +65,19 @@ static int meta_section(const char *n)
 static int data_section(const char *n)
 {
 	static const char *const exact[] = {"", ".symtab", ".strtab", ".shstrtab", "license", ".maps", ".rodata", ".bss",
-					    ".ebpf_requirements", ".ebpf_records"};
+					    ".ebpf_requirements", ".ebpf_records",
+					    /* struct_ops: the struct_ops link table, and .data (libbpf's ordinary internal map; loaded, no bml read yet) */
+					    ".struct_ops.link", ".data"};
 	for (size_t i = 0; i < sizeof exact / sizeof *exact; i++)
 		if (strcmp(n, exact[i]) == 0)
 			return 1;
-	return 0;
+	return BML_MUT("load.struct_ops_plain_ok") && strcmp(n, ".struct_ops") == 0; /* mutant: G1 off */
+}
+
+/* struct_ops: the struct_ops table sections; their relocations may only be R_BPF_64_ABS64 (a program in a slot) */
+static int table_section(const char *n)
+{
+	return strcmp(n, ".struct_ops.link") == 0 || (BML_MUT("load.struct_ops_plain_ok") && strcmp(n, ".struct_ops") == 0);
 }
 
 /* The members of the struct of a var in the .maps DATASEC may be only the libbpf map-definition names that bpf-mlir uses (pinning, values and inner maps are rejected) */
@@ -258,14 +160,18 @@ int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r)
 			break;
 		}
 		if (s->type != BML_SHT_REL) {
-			if (!prog_section(s->name) && !meta_section(s->name) && !data_section(s->name))
+			if (strcmp(s->name, ".struct_ops") == 0 && !BML_MUT("load.struct_ops_plain_ok")) { /* struct_ops guard G1 */
+				rc = lb_fail(r, BML_LOAD_SHAPE, "struct_ops table section .struct_ops registers at load (only .struct_ops.link is accepted)");
+				break;
+			}
+			if (!lb_prog_section(s->name) && !meta_section(s->name) && !data_section(s->name))
 				rc = lb_fail(r, BML_LOAD_SHAPE, "section %s is not in the bpf-mlir ELF form", s->name);
 			continue;
 		}
 		/* relocations: program sections allow R_BPF_64_64 (1) and R_BPF_64_32 (10); BTF and debug sections allow ABS64 (2), ABS32 (3) and NODYLD32 (4) */
 		const char *target = strncmp(s->name, ".rel", 4) == 0 ? s->name + 4 : "";
-		int prog = prog_section(target), meta = meta_section(target);
-		if (!prog && !meta) {
+		int prog = lb_prog_section(target), meta = meta_section(target), table = table_section(target);
+		if (!prog && !meta && !table) {
 			rc = lb_fail(r, BML_LOAD_SHAPE, "relocation section %s targets a section outside the form", s->name);
 			break;
 		}
@@ -277,7 +183,7 @@ int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r)
 		}
 		for (size_t k = 0; k < n / 16; k++) {
 			uint32_t type = (uint32_t)bml_elf_u64(&e, p + 16 * k + 8);
-			int ok = prog ? (type == 1 || type == 10) : (type == 2 || type == 3 || type == 4);
+			int ok = prog ? (type == 1 || type == 10) : table ? type == 2 : (type == 2 || type == 3 || type == 4);
 			if (!ok) {
 				rc = lb_fail(r, BML_LOAD_SHAPE, "relocation type %u in %s is outside the bpf-mlir ELF form", type, s->name);
 				break;
@@ -291,15 +197,17 @@ int lb_check_shape(const uint8_t *elf, size_t len, struct bml_load_result *r)
 		err = NULL;
 		if (bml_elf_symbols(&e, BML_SHT_SYMTAB, &syms, &ns, &err) != 0)
 			rc = lb_fail(r, BML_LOAD_SHAPE, "the ELF has no symbol table");
+		int other_externs = 0;
 		for (size_t i = 0; i < ns && !rc; i++) {
-			if (syms[i].shndx == BML_SHN_UNDEF) {
-				int proof=lb_arena_extern(&e,syms,ns,i,r);
+			if (syms[i].shndx == BML_SHN_UNDEF) { /* the arena kfuncs keep their proof; the others are proved once, below */
+				int proof = lb_kfunc_is_arena_name(syms[i].name) ? lb_arena_extern(&e,syms,ns,i,r) : (other_externs = 1);
 				if(proof<0)rc=-1;
 				else if(!proof)rc = lb_fail(r, BML_LOAD_SHAPE, "symbol %s is undefined (extern — libbpf would resolve it)", syms[i].name);
 			}
 			else if ((syms[i].other & 3) != 0)
 				rc = lb_fail(r, BML_LOAD_SHAPE, "symbol %s is not STV_DEFAULT (libbpf would make it static — B5)", syms[i].name);
 		}
+		if (!rc && other_externs) rc = lb_kfunc_externs(&e, syms, ns, NULL, r);
 		free(syms);
 		free(err);
 	}
@@ -470,10 +378,10 @@ int lb_check_features(const uint8_t *elf, size_t len, const struct bml_requireme
 	return 0;
 }
 
-const char *lb_errno(int e)
+const char *lb_errno(int e) /* class B (the errno tables): bml's load messages, never compared with Go's text */
 {
 	static __thread char buf[256];
-	char *s = bml_go_errno_str(e);
+	char *s = bml_errno_text(e);
 	snprintf(buf, sizeof buf, "%s", s ? s : "unknown error");
 	free(s);
 	return buf;

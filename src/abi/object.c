@@ -184,6 +184,7 @@ static void object_free(struct abi_object *o)
 	bml_unmets_free(&o->rest);
 	bml_live_caps_free(&o->caps);
 	abi_globals_free(o);
+	abi_sops_free(o);
 	free(o);
 }
 
@@ -326,6 +327,8 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 	if (bml_load_guarded_values(o->elf, o->elf_len, o->req, &caps, vals, n_vals, &o->lo, &lr) != 0) {
 		if (lr.stage == BML_LOAD_LIBBPF && lr.verifier)
 			res = verifier_fail(&lr);
+		else if (lr.stage == BML_LOAD_STRUCT_OPS_TARGET) /* struct_ops guard G3 */
+			res = abi_fail(BML_TARGET_REJECTED, "bml: the target cannot take this struct_ops table: %s", lr.msg ? lr.msg : "");
 		else if (lr.stage == BML_LOAD_LIBBPF || lr.stage == BML_LOAD_OPEN || lr.stage == BML_LOAD_ENV)
 		{
 			char hint[256];
@@ -344,7 +347,7 @@ static int64_t load_impl(const uint8_t *elf, int64_t n, const char *sha, int64_t
 		res = abi_fail(BML_PRECHECK_FAILED, "bml: the embedded ELF has no map %s", mm);
 		goto out;
 	}
-	if (abi_globals_keep(o, &d) != 0) {
+	if (abi_globals_keep(o, &d) != 0 || abi_sops_fill(o) != 0) {
 		res = abi_fail(BML_OTHER, "bml: out of memory");
 		goto out;
 	}
@@ -398,7 +401,11 @@ int64_t bml_close(int64_t obj)
 	abi_lock();
 	struct abi_object *o = abi_handle_get(obj, H_OBJECT);
 	int closed = o && o->closed, busy = o && !closed ? o->inflight : 0;
-	int first = o && !closed && (busy == 0 || BML_MUT("abi.close_ignores_inflight"));
+	/* struct_ops (the close rule): not while a struct_ops table of the object is registered; other link kinds are unchanged */
+	const struct abi_sop *live = o && !closed && !BML_MUT("abi.close_struct_ops_ok") ? abi_sops_live(o) : NULL;
+	char *live_name = live ? strdup(live->name) : NULL;
+	int live_busy = live ? live->busy : 0; /* destroy before release: a table reserved by an attach or a detach in progress counts as live */
+	int first = o && !closed && !live && (busy == 0 || BML_MUT("abi.close_ignores_inflight"));
 	if (first) {
 		o->closed = 1;
 		if (abi_loaded == obj)
@@ -409,6 +416,13 @@ int64_t bml_close(int64_t obj)
 		return abi_fail(BML_STATE, "bml: no loaded object %lld (load it first)", (long long)obj);
 	if (closed)
 		return abi_ok(0);
+	if (live) {
+		int64_t res = live_busy ? abi_fail(BML_STATE, "bml: struct_ops map %s is being %s on another thread — close it again after that returns",
+							   live_name ? live_name : "?", live_busy == ABI_SOP_ATTACHING ? "registered" : "unregistered")
+					: abi_fail(BML_STATE, "bml: struct_ops map %s is still registered (detach its link first)", live_name ? live_name : "?");
+		free(live_name);
+		return res;
+	}
 	if (!first)
 		return abi_fail(BML_STATE, "bml: the object %lld has %d calls in flight on other threads — close it again after they return", (long long)obj,
 				busy);
@@ -423,6 +437,7 @@ int64_t bml_close(int64_t obj)
 		bml_unmets_free(&o->rest);
 		bml_live_caps_free(&o->caps);
 		abi_globals_free(o);
+		abi_sops_free(o);
 	}
 	return abi_ok(0);
 }

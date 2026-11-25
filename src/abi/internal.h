@@ -51,7 +51,44 @@ struct abi_object {
 	/* The declarations of the globals given at load time (the globals of maps.json); bml_global_get checks against them. */
 	struct bml_global_decl *globals;
 	size_t n_globals;
+	/* struct_ops (struct_ops.c): every map of the object, with its struct_ops kind and the link that registers it (under the registry lock) */
+	struct abi_sop *sops;
+	size_t n_sops;
+	int fake; /* bml_testonly_struct_ops_object: no libbpf object; attach and detach do not call the kernel */
 };
+
+/* ---- struct_ops (struct_ops.c) ---- */
+enum { ABI_SOP_OTHER = 0, ABI_SOP_PLAIN, ABI_SOP_LINK };
+enum { ABI_SOP_IDLE = 0, ABI_SOP_ATTACHING, ABI_SOP_DETACHING };
+struct abi_link;
+struct abi_sop {
+	char *name;
+	int kind;
+	int64_t link; /* the H_LINK handle that registered the table; 0 none */
+	int busy;     /* ABI_SOP_ATTACHING / DETACHING: the reservation, held until the kernel call and its cleanup have returned */
+};
+/* Records the object's maps (after a load). -1 when out of memory. */
+int abi_sops_fill(struct abi_object *o);
+void abi_sops_free(struct abi_object *o);
+/* CONTRACT: a table that is registered, or reserved by an attach or a detach still in progress (NULL if none). Call with the lock held */
+const struct abi_sop *abi_sops_live(const struct abi_object *o);
+/* CONTRACT: detach of a struct_ops link, called by bml_detach with the lock held: 1 and the table reserved (DETACHING) if
+ * the caller must destroy the link and then call abi_sops_detach_done; -1 if a detach of it is already in progress (STATE);
+ * 0 if there is nothing to unregister */
+int abi_sops_detach_begin(struct abi_link *al, int64_t link);
+/* CONTRACT: the destroy has returned: the reservation is released. Call with the lock held */
+void abi_sops_detach_done(struct abi_link *al, int64_t link);
+/* Test build (testonly.c, bml_testonly_struct_ops_seam): a pause point; the result of a fake link's destroy (0, or -1 and
+ * errno); an injected failure of the next struct_ops link handle. The product build has none of them. */
+#ifdef BML_TEST_CAPS
+void abi_test_pause(const char *point);
+int abi_test_destroy_rc(void);
+int abi_test_take_handle_failure(void);
+#else
+#define abi_test_pause(point) ((void)0)
+#define abi_test_destroy_rc() 0
+#define abi_test_take_handle_failure() 0
+#endif
 
 /* (globals.c) Reads the config document, checks it against the declared globals and stores the values to
  * write into .rodata in *vals (malloc). Success is 0; failure is a result handle
@@ -112,6 +149,9 @@ struct abi_link {
 	size_t n_extra;
 	struct bpf_link **more; /* USDT: the second and later uprobe links, one per probe point (destroyed together with l on detach). */
 	size_t n_more;
+	int64_t sop_owner; /* struct_ops: the object whose struct_ops table this link registered; 0 for other links */
+	int fake;          /* struct_ops test build: a live link with no kernel link (l is NULL); detach only clears it */
+	int detaching;     /* struct_ops: a detach of this struct_ops link is between its reservation and the end of its destroy */
 };
 /* CONTRACT: the same, for per-point USDT links (ownership of the n entries in more moves, the array is copied; failure destroys them all) */
 int64_t abi_link_put_more(struct bpf_link *l, struct bpf_link **more, size_t n);

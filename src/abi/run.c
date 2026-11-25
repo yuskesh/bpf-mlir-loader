@@ -179,6 +179,25 @@ int64_t bml_detach(int64_t link)
 	/* idempotent: a second call is OK too, because the entry stays in the table */
 	abi_lock();
 	struct abi_link *al = abi_handle_get(link, H_LINK);
+	if (al && al->sop_owner) { /* struct_ops (destroy before release): the table stays reserved until the destroy has returned */
+		int b = abi_sops_detach_begin(al, link), fake = al->fake;
+		struct bpf_link *sl = al->l;
+		al->l = NULL, al->fake = 0;
+		abi_unlock();
+		if (b < 0)
+			return abi_fail(BML_STATE, "bml: a detach of link %lld is already in progress", (long long)link);
+		if (b == 0)
+			return abi_ok(0);
+		abi_test_pause("detach-destroy");
+		int rc = fake ? abi_test_destroy_rc() : bpf_link__destroy(sl), e = errno;
+		abi_lock();
+		abi_sops_detach_done(al, link); /* libbpf frees the link and closes its fd even when the destroy reports an error */
+		abi_unlock();
+		if (rc != 0)
+			return abi_fail(BML_OTHER, "bml: detach: %s (the link is closed; the kernel unregisters the table when its last reference goes)",
+					abi_errno(e));
+		return abi_ok(0);
+	}
 	struct bpf_link *l = al ? al->l : NULL;
 	int *fds = al ? al->extra_fds : NULL;
 	size_t n = al ? al->n_extra : 0;
@@ -190,6 +209,7 @@ int64_t bml_detach(int64_t link)
 		al->n_extra = 0;
 		al->more = NULL;
 		al->n_more = 0;
+		al->fake = 0; /* struct_ops: a test-build fake link has no kernel link to close */
 	}
 	abi_unlock();
 	if (!al)
